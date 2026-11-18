@@ -1,0 +1,146 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Taxi trip time</title>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow:wght@400;600&family=Barlow+Condensed:wght@700&display=swap">
+  <style>
+    :root {
+      --asphalt: #26282c;
+      --cab: #f5c518;
+      --paper: #fafaf7;
+      --line: #d9d9d4;
+      --muted: #6b6e73;
+      --error: #b3261e;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Barlow, system-ui, sans-serif;
+      background: var(--paper);
+      color: var(--asphalt);
+    }
+    main { max-width: 30rem; margin: 3rem auto; padding: 0 1.25rem; }
+    h1 {
+      font-family: "Barlow Condensed", Barlow, system-ui, sans-serif;
+      font-size: 2.25rem;
+      margin: 0 0 0.25rem;
+    }
+    .intro { color: var(--muted); margin: 0 0 2rem; line-height: 1.5; }
+
+    .meter {
+      background: var(--asphalt);
+      color: var(--cab);
+      border-top: 6px solid var(--cab);
+      border-radius: 6px;
+      padding: 1.25rem 1.5rem;
+      margin-bottom: 2rem;
+    }
+    .meter .value {
+      font-family: "Barlow Condensed", Barlow, system-ui, sans-serif;
+      font-size: 4rem;
+      line-height: 1;
+      font-variant-numeric: tabular-nums;
+    }
+    .meter .unit { font-size: 1.25rem; margin-left: 0.35rem; }
+    .meter .note { color: #c9cbcf; font-size: 0.9rem; margin-top: 0.5rem; }
+
+    form { display: grid; gap: 1rem; }
+    .row { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    label { display: grid; gap: 0.35rem; font-weight: 600; }
+    small { color: var(--muted); font-weight: 400; }
+    input {
+      font: inherit;
+      padding: 0.6rem 0.75rem;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: #fff;
+      color: inherit;
+    }
+    button {
+      font: inherit;
+      font-weight: 600;
+      padding: 0.75rem;
+      border: 0;
+      border-radius: 4px;
+      background: var(--cab);
+      color: var(--asphalt);
+      cursor: pointer;
+    }
+    button:disabled { opacity: 0.6; cursor: wait; }
+    input:focus-visible, button:focus-visible { outline: 3px solid var(--cab); outline-offset: 2px; }
+    .error { color: var(--error); min-height: 1.5em; margin: 0; }
+    @media (max-width: 420px) { .row { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>How long will the ride take?</h1>
+    <p class="intro">Estimate a New York yellow taxi trip from its pickup zone, dropoff zone and pickup time.</p>
+
+    <div class="meter" aria-live="polite">
+      <div><span class="value" id="minutes">--</span><span class="unit">min</span></div>
+      <div class="note" id="note">Enter a trip and press Estimate trip time.</div>
+    </div>
+
+    <form id="trip">
+      <div class="row">
+        <label>Pickup zone
+          <input type="number" id="pickup" min="1" max="265" value="161" required>
+          <small>1–265, e.g. 161 Midtown Center</small>
+        </label>
+        <label>Dropoff zone
+          <input type="number" id="dropoff" min="1" max="265" value="132" required>
+          <small>e.g. 132 JFK Airport</small>
+        </label>
+      </div>
+      <label>Pickup time
+        <input type="datetime-local" id="when" value="2025-01-27T08:30" required>
+        <small>Local New York time</small>
+      </label>
+      <button type="submit" id="go">Estimate trip time</button>
+      <p class="error" id="error" role="alert"></p>
+    </form>
+  </main>
+
+  <script>
+    const form = document.getElementById("trip");
+    const button = document.getElementById("go");
+    const error = document.getElementById("error");
+
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      error.textContent = "";
+      button.disabled = true;
+
+      let when = document.getElementById("when").value;
+      if (when.length === 16) when += ":00";  // add seconds
+
+      try {
+        const response = await fetch("/predict", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            PULocationID: Number(document.getElementById("pickup").value),
+            DOLocationID: Number(document.getElementById("dropoff").value),
+            pickup_datetime: when,
+          }),
+        });
+        if (response.status === 422) throw new Error("Check the trip: zones must be between 1 and 265, and the pickup time must be set.");
+        if (!response.ok) throw new Error("The server could not estimate this trip. Check that the API is running.");
+
+        const result = await response.json();
+        document.getElementById("minutes").textContent = result.duration_minutes.toFixed(1);
+        document.getElementById("note").textContent = `Estimated by model version ${result.model_version}`;
+      } catch (e) {
+        error.textContent = e.message === "Failed to fetch"
+          ? "Can't reach the API. Start it with uvicorn and reload this page."
+          : e.message;
+      } finally {
+        button.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
