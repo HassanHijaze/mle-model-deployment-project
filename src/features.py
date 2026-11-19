@@ -19,14 +19,21 @@ FEATURES = [
 
 
 def build_zone_xy(data_dir: Path) -> pd.DataFrame:
-    """Center point of each taxi zone (x/y in feet, lat/lon), indexed by LocationID."""
+    """Center point of each taxi zone (x/y in feet, lat/lon), indexed by LocationID.
+
+    Downloads the TLC zone shapefile into data_dir/taxi_zones if no .shp file is there yet.
+    """
     zone_dir = data_dir / "taxi_zones"
-    if not zone_dir.exists():
+    shp_files = list(zone_dir.rglob("*.shp")) if zone_dir.exists() else []
+    if not shp_files:
         r = requests.get(ZONES_URL, timeout=60)
         r.raise_for_status()
         zipfile.ZipFile(io.BytesIO(r.content)).extractall(zone_dir)
+        shp_files = list(zone_dir.rglob("*.shp"))
+    if not shp_files:
+        raise FileNotFoundError(f"No .shp file found in {zone_dir} after download")
 
-    gdf = gpd.read_file(next(zone_dir.rglob("*.shp"))).dissolve(by="LocationID")
+    gdf = gpd.read_file(shp_files[0]).dissolve(by="LocationID")
     centroids = gdf.geometry.centroid     # feet (NYC map projection)
     latlon = centroids.to_crs(epsg=4326)  # latitude/longitude
     return pd.DataFrame({"x": centroids.x, "y": centroids.y,
