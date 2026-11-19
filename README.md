@@ -93,7 +93,7 @@ CI also builds the API Docker image on every push.
 **4.31 minutes** on the test set (680,825 trips, Jan 26–31), RMSLE 0.304.
 
 **2. What would you do differently with more time?**
-- **Add new information:** over 30 additional features from zones and time gave no measurable gain. Further improvement requires live traffic, exact locations or event data.
+- **Add new information:** live traffic, exact pickup and drop-off locations or event data, since zones and time alone limit how precise predictions can be.
 - **Use more history:** train on several months to cover seasons, weather and holidays.
 - **Re-tune on full data:** hyperparameters were tuned on a 500k sample.
 - **Reduce model size:** larger leaves or fewer trees for cheaper serving.
