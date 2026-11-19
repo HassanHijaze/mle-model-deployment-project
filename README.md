@@ -3,48 +3,81 @@
 [![CI](https://github.com/HassanHijaze/mle-model-deployment-project/actions/workflows/ci.yml/badge.svg)](https://github.com/HassanHijaze/mle-model-deployment-project/actions/workflows/ci.yml)
 
 Predicts NYC yellow taxi trip duration from the pickup zone, drop-off zone and pickup time.
-Random Forest · MLflow (PostgreSQL) · FastAPI · Docker Compose.
+**Stack:** Random Forest · MLflow (PostgreSQL) · FastAPI · Docker Compose
 
 ## Results
 
-Time-based split on January 2025 trips: train Jan 1–20, validation Jan 21–25, test Jan 26–31.
+Time-based split on 1–60 minute trips: **train Jan 1–20 · validation Jan 21–25 · test Jan 26–31**.
 
-| Model | Split | RMSE (min) |
+| Model | Evaluated on | RMSE (min) |
 |---|---|---|
-| Baseline (500k sample) | validation | 4.522 |
-| Optuna-tuned (500k sample) | validation | 4.485 |
-| **Final** (tuned, all 2.7M Jan 1–25 trips) | **test** | **4.312** |
+| Baseline (50 trees, 500k sample) | validation | 4.522 |
+| Optuna-tuned (20 trials, 500k sample) | validation | 4.485 |
+| **Final** (tuned, retrained on 2.7M Jan 1–25 trips) | **test** | **4.312** |
 
-More data helped far more than tuning. Details: [notebooks/exploration.ipynb](notebooks/exploration.ipynb).
+Tuned settings: `n_estimators=200`, `max_depth=25`, `min_samples_leaf=8`, `max_features=0.5`.
+Full analysis: [notebooks/exploration.ipynb](notebooks/exploration.ipynb).
 
-## Quick start
+### Model serving options
+
+Both models are registered in MLflow as `nyc-taxi-duration-rf`. Serve one by assigning it the `champion` alias.
+
+| Model | RMSE | Size | Memory |
+|---|---|---|---|
+| **Final** (`rf-final-jan1-25`) | 4.312 (test) | several GB | requires increased Docker memory |
+| **Baseline** (`rf-baseline`) | 4.522 (validation) | small | runs with Docker defaults |
+
+## Quick Start
 
 ```bash
 uv sync
 cp .env.example .env && mkdir -p data
-docker compose up -d                # MLflow: localhost:5002, API: localhost:8000
-uv run python -m src.train          # trains and registers baseline + final model
+docker compose up -d              # MLflow: localhost:5002 · API: localhost:8000
+uv run python -m src.train        # trains and registers both models
 ```
 
-In the MLflow UI, give a model version the alias **`champion`**, then run `curl -X POST http://localhost:8000/reload`.
+Assign the `champion` alias in the MLflow UI, then load it: `curl -X POST http://localhost:8000/reload`
 
-> The final model needs more memory than Docker's default. If the API stops while loading it, serve the baseline or raise Docker's memory (`memory=12GB` in `.wslconfig` on Windows).
+> **Memory:** if the API stops while loading the final model, serve the baseline or increase Docker's memory (`memory=12GB` in `%USERPROFILE%\.wslconfig` on Windows).
 
 ## API
+
+| Endpoint | Description |
+|---|---|
+| `POST /predict` | Predicts trip duration |
+| `POST /reload` | Loads the current `champion` without restarting |
+| `GET /health` | Model and zone map status |
+| `GET /` | Web form |
 
 ```bash
 curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" \
   -d '{"PULocationID": 161, "DOLocationID": 236, "pickup_datetime": "2025-01-27T08:30:00"}'
 ```
 
-Endpoints: `/predict`, `/reload`, `/health`, and a web form at `/`. Zones are 1–265; time is NYC local time without a timezone.
+Zone IDs: 1–265. `pickup_datetime`: NYC local time, no timezone.
 
 ## Tests
 
-`uv run pytest` — tests needing MLflow or a `champion` model skip automatically. CI runs tests and builds the Docker image.
+```bash
+uv run pytest
+```
 
-## Notes
+Tests requiring MLflow or a `champion` model are skipped automatically. CI runs the tests and builds the Docker image on every push.
 
-- **No leakage:** `trip_distance` and fares are only known after a trip, so distance comes from zone centers.
+## Design Notes
+
+- **No leakage:** `trip_distance` and fares are only known after a trip; distance is derived from zone centers.
 - **One feature path:** training and the API share `src/features.py`.
-- **Next steps:** a smaller final model, prediction ranges, more months of data.
+- **Manual promotion:** new versions are registered without an alias; `champion` is set by hand.
+
+## Project Questions
+
+**1. What is the RMSE of the final model?**
+**4.31 minutes** on the test set (680,825 trips, Jan 26–31), RMSLE 0.304.
+
+**2. What would you do differently with more time?**
+- **Add new information:** over 30 additional features from zones and time gave no measurable gain. Further improvement requires live traffic, exact locations or event data.
+- **Use more history:** train on several months to cover seasons, weather and holidays.
+- **Re-tune on full data:** hyperparameters were tuned on a 500k sample.
+- **Reduce model size:** larger leaves or fewer trees for cheaper serving.
+- **Return prediction ranges:** derived from the spread of the trees, most useful for airport trips.
