@@ -1,7 +1,8 @@
 # API image: FastAPI app + feature code, dependencies installed with uv
 FROM python:3.13-slim
 
-COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+# Pinned uv version (same as the project requires), so builds are reproducible
+COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv
 WORKDIR /app
 
 # Dependencies first (cached unless pyproject.toml / uv.lock change)
@@ -11,6 +12,10 @@ RUN uv sync --frozen --no-dev --no-install-project
 # Application code
 COPY src ./src
 COPY app ./app
+
+# Run as a normal user, not root. UID 1000 matches the default user on most Linux
+RUN useradd --create-home --uid 1000 appuser && chown -R appuser:appuser /app
+USER appuser
 
 ENV PATH="/app/.venv/bin:$PATH"
 EXPOSE 8000
