@@ -29,7 +29,8 @@ mlflow.set_tracking_uri(
 )
 
 client = MlflowClient()
-_lock = threading.Lock()
+_lock = threading.Lock()          # protects model, model_version and zone_xy
+_reload_lock = threading.Lock()   # only one /reload at a time (the model can be several GB)
 
 zone_xy = None        # built at startup (see lifespan)
 model = None
@@ -152,24 +153,33 @@ def predict(trip: Trip) -> Prediction:
 
 @app.post("/reload")
 def reload() -> dict:
-    """Reload the champion model, and retry the zone map if it failed at startup."""
+    """Reload the champion model, and retry the zone map if it failed at startup.
+
+    Only one reload runs at a time; a second call while one is running gets 409.
+    """
     global model, model_version, zone_xy
 
-    new_zones = zone_xy if zone_xy is not None else load_zone_xy()
-    new_model, new_version = load_champion()   # slow part, outside the lock
+    if not _reload_lock.acquire(blocking=False):
+        raise HTTPException(status_code=409, detail="A reload is already running. Try again shortly.")
 
-    with _lock:
-        old = model_version
-        zone_xy = new_zones
-        if new_model is not None:
-            model = new_model
-            model_version = new_version
-        return {
-            "previous_version": old,
-            "current_version": model_version,
-            "model_loaded": model is not None,
-            "zones_loaded": zone_xy is not None,
-        }
+    try:
+        new_zones = zone_xy if zone_xy is not None else load_zone_xy()
+        new_model, new_version = load_champion()   # slow part, outside _lock
+
+        with _lock:
+            old = model_version
+            zone_xy = new_zones
+            if new_model is not None:
+                model = new_model
+                model_version = new_version
+            return {
+                "previous_version": old,
+                "current_version": model_version,
+                "model_loaded": model is not None,
+                "zones_loaded": zone_xy is not None,
+            }
+    finally:
+        _reload_lock.release()
 
 
 @app.get("/health")
