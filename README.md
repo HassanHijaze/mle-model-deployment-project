@@ -8,14 +8,18 @@ Predicts NYC yellow taxi trip duration from the pickup zone, drop-off zone and p
 ## Results
 
 Time-based split on 1–60 minute trips: **train Jan 1–20 · validation Jan 21–25 · test Jan 26–31**.
+All models are scored on all validation trips (637,543) and all test trips (680,825).
 
 | Model | Validation RMSE | Test RMSE |
 |---|---|---|
-| Always predict the overall median | – | 10.090 |
+| Always predict the overall median | 9.995 | 10.090 |
 | Median per pickup/drop-off zone pair | 5.444 | 5.327 |
-| Random Forest baseline (50 trees, 500k sample) | 4.522 | – |
-| Optuna-tuned (20 trials, 500k sample) | 4.485 | – |
-| **Final** (tuned, retrained on 2.7M Jan 1–25 trips) | – | **4.312** |
+| Random Forest baseline (50 trees, 500k sample) | 4.509 | 4.509 |
+| Optuna-tuned (20 trials, 500k sample) | 4.466 | 4.462 |
+| **Final** (tuned, all 2.7M Jan 1–25 trips) | – | **4.312** |
+
+"–": the final model is trained on the validation days, so it has no validation score.
+The same settings trained on Jan 1–20 scored 4.344 on validation.
 
 The final model is **19% better** than the zone-pair median and **57% better** than a single guess.
 Tuned settings: `n_estimators=200`, `max_depth=25`, `min_samples_leaf=8`, `max_features=0.5`.
@@ -25,10 +29,10 @@ Full analysis: [notebooks/exploration.ipynb](notebooks/exploration.ipynb).
 
 Both models are registered in MLflow as `nyc-taxi-duration-rf`. Serve one by assigning it the `champion` alias.
 
-| Model | RMSE | Size | Memory |
+| Model | Test RMSE | Size | Memory |
 |---|---|---|---|
-| **Final** (`rf-final-jan1-25`) | 4.312 (test) | several GB | requires increased Docker memory |
-| **Baseline** (`rf-baseline`) | 4.522 (validation) | small | runs with Docker defaults |
+| **Final** (`rf-final-jan1-25`) | 4.312 | several GB | requires increased Docker memory |
+| **Baseline** (`rf-baseline`) | 4.509 | small | runs with Docker defaults |
 
 ## Quick Start
 
