@@ -44,17 +44,6 @@ Choose one by giving it the `champion` alias in the MLflow UI.
 
 **Requirements:** Docker, [uv](https://docs.astral.sh/uv/) ≥ 0.13.5, Python 3.13, and several GB of free RAM and disk space for the final model.
 
-**Memory for the final model:** loading it needs more memory than Docker Desktop gets by default
-(about half your RAM on Windows/macOS). If the API keeps restarting while it loads the model,
-either serve the baseline model instead, or give Docker more memory. On Windows, create
-`%USERPROFILE%\.wslconfig` with:
-
-```
-[wsl2]
-memory=12GB
-```
-
-then run `wsl --shutdown` in PowerShell and start Docker Desktop again.
 
 ```bash
 # 1. Install dependencies and configure the environment
@@ -100,15 +89,6 @@ Response format (the values are only an example):
 Zone IDs must be between 1 and 265. `pickup_datetime` is New York local time **without** a timezone.
 Interactive docs are at http://localhost:8000/docs.
 
-## Project Structure
-
-```
-app/          FastAPI app (main.py) and web form (static/)
-src/          features.py, train.py, experiment.py (MLflow logging), tuning.py (Optuna)
-notebooks/    Exploration, tuning and results summary
-tests/        Feature, model and API tests
-docker/       MLflow server image
-```
 
 ## Tests
 
@@ -120,7 +100,6 @@ Feature tests run without any setup. Model and API tests need the MLflow server 
 
 ## Design Notes
 
-- **No data leakage:** `trip_distance` and the fare columns are only known after a trip ends, so the model doesn't use them. Distance comes from the zone map instead (straight-line distance between zone centers).
 - **One feature path:** training, the notebook and the API all build features with the same function (`src/features.py`), and a test checks that the API and the model give identical predictions.
 - **Time-based split:** the model is evaluated on days it never saw, as it would be in production.
 - **Tuning vs. more data:** Optuna improved validation RMSE by about 0.04 minutes, while training on all trips instead of a sample improved it by about 0.14. More data mattered far more than tuning.

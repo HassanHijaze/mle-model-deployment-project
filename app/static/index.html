@@ -109,6 +109,13 @@
     const button = document.getElementById("go");
     const error = document.getElementById("error");
 
+    // Turn FastAPI's error "detail" (text, or a list of validation errors) into one message
+    function detailMessage(detail) {
+      if (typeof detail === "string") return detail;
+      if (Array.isArray(detail)) return detail.map((d) => d.msg).join(" ");
+      return null;
+    }
+
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
       error.textContent = "";
@@ -127,15 +134,24 @@
             pickup_datetime: when,
           }),
         });
-        if (response.status === 422) throw new Error("Check the trip: zones must be between 1 and 265, and the pickup time must be set.");
-        if (!response.ok) throw new Error("The server could not estimate this trip. Check that the API is running.");
+
+        if (!response.ok) {
+          let message = null;
+          try { message = detailMessage((await response.json()).detail); } catch (_) {}
+          if (!message) {
+            message = response.status === 422
+              ? "Check the trip: zones must be between 1 and 265, and the pickup time must be set."
+              : "The server could not estimate this trip.";
+          }
+          throw new Error(message);
+        }
 
         const result = await response.json();
         document.getElementById("minutes").textContent = result.duration_minutes.toFixed(1);
         document.getElementById("note").textContent = `Estimated by model version ${result.model_version}`;
       } catch (e) {
         error.textContent = e.message === "Failed to fetch"
-          ? "Can't reach the API. Start it with uvicorn and reload this page."
+          ? "Can't reach the API. Start it with docker compose up -d and reload this page."
           : e.message;
       } finally {
         button.disabled = false;
