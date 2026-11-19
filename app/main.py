@@ -1,4 +1,8 @@
-"""FastAPI app for NYC yellow taxi trip duration prediction."""
+"""FastAPI app for NYC yellow taxi trip duration prediction.
+
+At startup the API loads the "champion" model from MLflow, together with the zone
+table (zone_xy.csv) logged in the same run. No download or geopandas is needed.
+"""
 
 import os
 import threading
@@ -15,14 +19,14 @@ from fastapi.responses import FileResponse
 from mlflow import MlflowClient
 from pydantic import BaseModel, Field, field_validator
 
-from src.features import build_features, build_zone_xy
+from src.features import build_features
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-ROOT = Path(__file__).resolve().parents[1]
 MODEL_NAME = "nyc-taxi-duration-rf"
 MODEL_ALIAS = "champion"
+ZONE_FILE = "zone_xy.csv"
 
 mlflow.set_tracking_uri(
     os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5002")
@@ -32,55 +36,49 @@ client = MlflowClient()
 _lock = threading.Lock()          # protects model, model_version and zone_xy
 _reload_lock = threading.Lock()   # only one /reload at a time (the model can be several GB)
 
-zone_xy = None        # built at startup (see lifespan)
+zone_xy = None
 model = None
 model_version = None
 
 
-def load_zone_xy():
-    """Build the zone lookup table, or return None if it fails (e.g. download or permission error)."""
-    logger.info("Building zone map from %s ...", ROOT / "data")
+def load_zones(run_id):
+    """Load the zone table logged with the model's run, or None if it is missing."""
     try:
-        zones = build_zone_xy(ROOT / "data")
-        logger.info("Zone map ready (%d zones)", len(zones))
+        path = mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path=ZONE_FILE)
+        zones = pd.read_csv(path, index_col="LocationID")
+        logger.info("Zone map loaded from MLflow (%d zones)", len(zones))
         return zones
     except Exception as exc:
-        logger.error("Zone map unavailable: %s", exc)
+        logger.error("Zone map unavailable for run %s: %s", run_id, exc)
         return None
 
 
 def load_champion():
-    """Load the current champion model if it exists."""
+    """Load the champion model and its zone table. Returns (model, version, zones)."""
     try:
         logger.info("Looking up '%s' alias of %s ...", MODEL_ALIAS, MODEL_NAME)
-        version = str(
-            client.get_model_version_by_alias(
-                MODEL_NAME, MODEL_ALIAS
-            ).version
-        )
+        mv = client.get_model_version_by_alias(MODEL_NAME, MODEL_ALIAS)
+        version = str(mv.version)
         logger.info("Champion is version %s, loading model ...", version)
 
-        loaded_model = mlflow.sklearn.load_model(
-            f"models:/{MODEL_NAME}/{version}"
-        )
+        loaded_model = mlflow.sklearn.load_model(f"models:/{MODEL_NAME}/{version}")
         logger.info("Model version %s loaded", version)
 
-        return loaded_model, version
+        return loaded_model, version, load_zones(mv.run_id)
 
     except Exception as exc:
         logger.warning("Champion model unavailable: %s", exc)
-        return None, None
+        return None, None, None
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Load the zone map and the champion model when the app starts.
+    """Load the champion model and its zone map when the app starts.
 
     If either fails, the API still starts; /predict returns 503 and /health shows what is missing.
     """
     global model, model_version, zone_xy
-    zone_xy = load_zone_xy()
-    model, model_version = load_champion()
+    model, model_version, zone_xy = load_champion()
     logger.info("Startup finished (zones_loaded=%s, model_loaded=%s)",
                 zone_xy is not None, model is not None)
     yield
@@ -124,15 +122,15 @@ def predict(trip: Trip) -> Prediction:
         current_version = model_version
         current_zones = zone_xy
 
-    if current_zones is None:
-        raise HTTPException(
-            status_code=503,
-            detail="Zone map not loaded. Check the API logs and the data/ folder, then call /reload."
-        )
     if current_model is None:
         raise HTTPException(
             status_code=503,
             detail="No model loaded. Register a champion model and call /reload."
+        )
+    if current_zones is None:
+        raise HTTPException(
+            status_code=503,
+            detail="Zone map not loaded. Register the model with its zone table (zone_xy.csv) and call /reload."
         )
 
     df = pd.DataFrame([{
@@ -153,7 +151,7 @@ def predict(trip: Trip) -> Prediction:
 
 @app.post("/reload")
 def reload() -> dict:
-    """Reload the champion model, and retry the zone map if it failed at startup.
+    """Reload the champion model and its zone map.
 
     Only one reload runs at a time; a second call while one is running gets 409.
     """
@@ -163,15 +161,12 @@ def reload() -> dict:
         raise HTTPException(status_code=409, detail="A reload is already running. Try again shortly.")
 
     try:
-        new_zones = zone_xy if zone_xy is not None else load_zone_xy()
-        new_model, new_version = load_champion()   # slow part, outside _lock
+        new_model, new_version, new_zones = load_champion()   # slow part, outside _lock
 
         with _lock:
             old = model_version
-            zone_xy = new_zones
             if new_model is not None:
-                model = new_model
-                model_version = new_version
+                model, model_version, zone_xy = new_model, new_version, new_zones
             return {
                 "previous_version": old,
                 "current_version": model_version,

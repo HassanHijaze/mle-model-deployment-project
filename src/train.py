@@ -9,6 +9,7 @@ tune_random_forest() run (Optuna, 20 trials on the 500k sample) in
 notebooks/exploration.ipynb. If you re-run the tuning there and get different
 settings, update BEST_PARAMS here by hand.
 
+Each model is logged with its zone table (zone_xy.csv), which the API loads.
 Registered models get no alias. Set the "champion" alias yourself in the MLflow UI.
 
 The MLflow server must be running (docker compose up -d); its address comes from
@@ -93,14 +94,15 @@ def main() -> None:
     X_s, y_s = build_features(sample, zone_xy), sample["duration"]
     tr_s, va_s, _ = split_by_time(sample)
     train_and_log(BASELINE_PARAMS, X_s[tr_s], y_s[tr_s], X_s[va_s], y_s[va_s],
-                  run_name="rf-baseline", register_name=MODEL_NAME)
+                  run_name="rf-baseline", register_name=MODEL_NAME, zone_xy=zone_xy)
     del sample, X_s, y_s
 
     # 2. Final model: train on Jan 1-25 (train + validation), test once on Jan 26-31, register
     X, y = build_features(full, zone_xy), full["duration"]
     tr, va, te = split_by_time(full)
     train_and_log(BEST_PARAMS, X[tr | va], y[tr | va], X[te], y[te],
-                  run_name="rf-final-jan1-25", eval_name="test", register_name=MODEL_NAME)
+                  run_name="rf-final-jan1-25", eval_name="test", register_name=MODEL_NAME,
+                  zone_xy=zone_xy)
 
 
 if __name__ == "__main__":

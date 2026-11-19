@@ -1,14 +1,15 @@
-"""Feature engineering shared by training and the API."""
+"""Feature engineering shared by training and the API.
 
-import io
-import zipfile
+build_zone_xy() needs geopandas and a download; it is only used during training.
+The API gets the finished zone table from MLflow (logged with the model), so it
+only needs build_features().
+"""
+
 from pathlib import Path
 
-import geopandas as gpd
 import holidays
 import numpy as np
 import pandas as pd
-import requests
 
 ZONES_URL = "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zones.zip"
 
@@ -23,6 +24,12 @@ def build_zone_xy(data_dir: Path) -> pd.DataFrame:
 
     Downloads the TLC zone shapefile into data_dir/taxi_zones if no .shp file is there yet.
     """
+    import io
+    import zipfile
+
+    import geopandas as gpd
+    import requests
+
     zone_dir = data_dir / "taxi_zones"
     shp_files = list(zone_dir.rglob("*.shp")) if zone_dir.exists() else []
     if not shp_files:

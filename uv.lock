@@ -1613,6 +1613,7 @@ dependencies = [
 
 [package.dev-dependencies]
 dev = [
+    { name = "geopandas" },
     { name = "httpx2" },
     { name = "ipykernel" },
     { name = "ipywidgets" },
@@ -1640,6 +1641,7 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "geopandas", specifier = ">=1.2.0" },
     { name = "httpx2", specifier = ">=2.13.1" },
     { name = "ipykernel", specifier = ">=7.3.0" },
     { name = "ipywidgets", specifier = ">=8.1.9" },

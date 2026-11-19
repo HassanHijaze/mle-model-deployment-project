@@ -14,8 +14,7 @@ VALID_TRIP = {"PULocationID": 161, "DOLocationID": 236, "pickup_datetime": "2025
 
 @pytest.fixture
 def client_no_model(monkeypatch):
-    monkeypatch.setattr(main, "load_champion", lambda: (None, None))
-    monkeypatch.setattr(main, "load_zone_xy", lambda: None)
+    monkeypatch.setattr(main, "load_champion", lambda: (None, None, None))
     with TestClient(main.app) as c:
         yield c
 
@@ -34,7 +33,7 @@ def test_predict_rejects_invalid_input(client_no_model, bad_trip):
 def test_predict_returns_503_without_model(client_no_model):
     r = client_no_model.post("/predict", json=VALID_TRIP)
     assert r.status_code == 503
-    assert "not loaded" in r.json()["detail"]
+    assert "No model loaded" in r.json()["detail"]
 
 
 def test_health_reports_nothing_loaded(client_no_model):
