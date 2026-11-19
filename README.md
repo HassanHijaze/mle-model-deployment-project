@@ -62,7 +62,12 @@ Zone IDs: 1–265. `pickup_datetime`: NYC local time, no timezone.
 uv run pytest
 ```
 
-Tests requiring MLflow or a `champion` model are skipped automatically. CI runs the tests and builds the Docker image on every push.
+| Tests | Locally | In CI |
+|---|---|---|
+| Features, data filtering, time split | ✓ | ✓ |
+| Model and API (skew, behavior, endpoints) | ✓ with MLflow running and a `champion` model | skipped (no MLflow server in CI) |
+
+CI also builds the API Docker image on every push.
 
 ## Design Notes
 
