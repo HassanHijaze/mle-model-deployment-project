@@ -74,17 +74,11 @@ Zone IDs: 1–265. `pickup_datetime`: NYC local time, no timezone.
 uv run pytest
 ```
 
-| Tests | Locally | In CI |
-|---|---|---|
-| Features, data filtering, time split | ✓ | ✓ |
-| Model and API (skew, behavior, endpoints) | ✓ with MLflow running and a `champion` model | skipped (no MLflow server in CI) |
-
-CI also builds the API Docker image on every push.
-
 ## Design Notes
 
 - **No leakage:** `trip_distance` and fares are only known after a trip; distance is derived from zone centers.
 - **One feature path:** training and the API share `src/features.py`.
+- **Zone map versioned with the model:** training logs the zone table (`zone_xy.csv`) in the same MLflow run; the API loads it with the champion, so no download at startup.
 - **Manual promotion:** new versions are registered without an alias; `champion` is set by hand.
 
 ## Project Questions
