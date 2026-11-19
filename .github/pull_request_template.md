@@ -8,7 +8,7 @@
 - [x] I wrote an API with a `/predict` endpoint.
 - [x] I ran the API locally or in Docker.
 - [x] I made a request against the API.
-- [ ] I documented the RMSE and my follow-up ideas in the README.
+- [x] I documented the RMSE and my follow-up ideas in the README.
 
 Bonus:
 
