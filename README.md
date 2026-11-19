@@ -9,12 +9,15 @@ Predicts NYC yellow taxi trip duration from the pickup zone, drop-off zone and p
 
 Time-based split on 1–60 minute trips: **train Jan 1–20 · validation Jan 21–25 · test Jan 26–31**.
 
-| Model | Evaluated on | RMSE (min) |
+| Model | Validation RMSE | Test RMSE |
 |---|---|---|
-| Baseline (50 trees, 500k sample) | validation | 4.522 |
-| Optuna-tuned (20 trials, 500k sample) | validation | 4.485 |
-| **Final** (tuned, retrained on 2.7M Jan 1–25 trips) | **test** | **4.312** |
+| Always predict the overall median | – | 10.090 |
+| Median per pickup/drop-off zone pair | 5.444 | 5.327 |
+| Random Forest baseline (50 trees, 500k sample) | 4.522 | – |
+| Optuna-tuned (20 trials, 500k sample) | 4.485 | – |
+| **Final** (tuned, retrained on 2.7M Jan 1–25 trips) | – | **4.312** |
 
+The final model is **19% better** than the zone-pair median and **57% better** than a single guess.
 Tuned settings: `n_estimators=200`, `max_depth=25`, `min_samples_leaf=8`, `max_features=0.5`.
 Full analysis: [notebooks/exploration.ipynb](notebooks/exploration.ipynb).
 
