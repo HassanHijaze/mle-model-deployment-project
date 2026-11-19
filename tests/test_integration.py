@@ -1,36 +1,16 @@
-"""Integration tests: real data loading, time split, champion model and API.
+"""Integration tests with the real champion model: model loading and API endpoints.
 
-Fixtures (data, model, client, ...) live in tests/conftest.py.
+Fixtures (model, client, ...) live in tests/conftest.py. These tests skip themselves
+when no MLflow server or champion model is available (e.g. in CI).
+Data cleaning and the time split are tested on made-up data in tests/test_data.py.
 """
 
 import pandas as pd
 import pytest
 
 from src.features import build_features
-from src.train import split_by_time
 
 TRIP = {"PULocationID": 161, "DOLocationID": 236, "pickup_datetime": "2025-01-27T08:30:00"}
-
-
-# ---------- Data ----------
-
-def test_load_data_filters_duration(data):
-    assert data["duration"].between(1, 60).all()
-    pickup = data["tpep_pickup_datetime"]
-    assert pickup.min() >= pd.Timestamp("2025-01-01")
-    assert pickup.max() < pd.Timestamp("2025-02-01")
-
-
-def test_time_split_has_no_overlap(data):
-    train, val, test = split_by_time(data)
-    assert not (train & val).any()
-    assert not (val & test).any()
-    assert not (train & test).any()
-    assert (train | val | test).all()
-
-    pickup = data["tpep_pickup_datetime"]
-    assert pickup[train].max() < pickup[val].min()
-    assert pickup[val].max() < pickup[test].min()
 
 
 # ---------- Champion model ----------
@@ -57,7 +37,7 @@ def test_predict_endpoint_returns_duration(client, champion_version):
     {**TRIP, "PULocationID": 0},
     {**TRIP, "DOLocationID": 300},
     {k: v for k, v in TRIP.items() if k != "pickup_datetime"},
-    {**TRIP, "pickup_datetime": "2025-01-27T08:30:00Z"},       # timezone-aware
+    {**TRIP, "pickup_datetime": "2025-01-27T08:30:00Z"},
     {**TRIP, "pickup_datetime": "2025-01-27T08:30:00+00:00"},
 ])
 def test_predict_rejects_invalid_input(client, bad_trip):

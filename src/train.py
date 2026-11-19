@@ -53,19 +53,21 @@ def download_january() -> None:
     tmp_path.replace(DATA_PATH)   # atomic rename
 
 
-def load_january() -> pd.DataFrame:
-    """All January 2025 trips of 1-60 minutes, sorted by pickup time."""
-    if not DATA_PATH.exists():
-        download_january()
-
-    df = pd.read_parquet(DATA_PATH, columns=COLUMNS)
-
+def clean_trips(df: pd.DataFrame) -> pd.DataFrame:
+    """Keep January 2025 pickups, sort by pickup time, add duration (minutes), keep 1-60 minute trips."""
     pickup = df["tpep_pickup_datetime"]
     df = df[(pickup >= "2025-01-01") & (pickup < "2025-02-01")]
     df = df.sort_values("tpep_pickup_datetime").reset_index(drop=True)
 
     df["duration"] = (df["tpep_dropoff_datetime"] - df["tpep_pickup_datetime"]).dt.total_seconds() / 60
     return df[(df["duration"] >= 1) & (df["duration"] <= 60)]
+
+
+def load_january() -> pd.DataFrame:
+    """All January 2025 trips of 1-60 minutes, sorted by pickup time."""
+    if not DATA_PATH.exists():
+        download_january()
+    return clean_trips(pd.read_parquet(DATA_PATH, columns=COLUMNS))
 
 
 def load_data(n: int = 500_000) -> pd.DataFrame:
