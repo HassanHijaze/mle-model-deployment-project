@@ -25,6 +25,11 @@ The final model is **19% better** than the zone-pair median and **57% better** t
 Tuned settings: `n_estimators=200`, `max_depth=25`, `min_samples_leaf=8`, `max_features=0.5`.
 Full analysis: [notebooks/exploration.ipynb](notebooks/exploration.ipynb).
 
+**Was the extra complexity worth it?** Tuning alone gave only ~1% (4.509 → 4.462 on test) and
+made the model larger. Training on all trips gave a further ~3%, but the model grows to several GB.
+For a production service, the small baseline (4% worse, a fraction of the size) is the more
+practical choice; the large model is only worth it if every few seconds of accuracy matter.
+
 ### Model serving options
 
 Both models are registered in MLflow as `nyc-taxi-duration-rf`. Serve one by assigning it the `champion` alias.
