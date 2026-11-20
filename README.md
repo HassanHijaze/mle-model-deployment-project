@@ -3,70 +3,85 @@
 
 [![CI](https://github.com/HassanHijaze/mle-model-deployment-project/actions/workflows/ci.yml/badge.svg)](https://github.com/HassanHijaze/mle-model-deployment-project/actions/workflows/ci.yml)
 
-An end-to-end ML system predicting NYC yellow-taxi trip duration from pickup/drop-off zones and pickup time. Includes reproducible training, validation-based model selection, MLflow registration, FastAPI serving, safe model reloads, CI, and Prometheus monitoring.
+**From NYC TLC trip records to a monitored prediction API.** This project predicts yellow-taxi trip duration using only information available at pickup: origin zone, destination zone, and pickup time. It includes reproducible training, validation-based model selection, MLflow registration, safe FastAPI model reloads, CI, and Prometheus metrics.
 
-**Result:** 4.4415 min test RMSE · **Serving model:** 112.4 MiB  
-**Stack:** scikit-learn · Optuna · MLflow · FastAPI · PostgreSQL · Docker Compose · Prometheus
+**4.4415 min test RMSE** · **112.4 MiB model** · **120 ms p95 at 10 users** · **0% load-test failures**
 
-[Results](#results) · [Architecture](#architecture) · [Data](#data-insights) · [Quick Start](#quick-start) · [API](#api) · [Tests](#tests-and-ci) · [Benchmarks](#monitoring-and-benchmarks) · [Limitations](#limitations)
+*Python · scikit-learn · Optuna · MLflow / PostgreSQL · FastAPI · Docker Compose · Prometheus · Locust*
+
+[Results](#results) · [Selection](#why-this-model) · [Architecture](#architecture) · [Data](#what-the-data-showed) · [Quick Start](#quick-start) · [API](#api) · [Quality & Benchmarks](#quality-and-benchmarks) · [Trade-offs](#decisions-and-limitations)
 
 ## Results
 
-January 2025 trips (1–60 min), split chronologically: **train Jan 1–20 · validation Jan 21–25 · test Jan 26–31**.
+January 2025 NYC yellow-taxi trips, restricted to **1–60 minutes**, with a chronological split: **train Jan 1–20**, **validate Jan 21–25**, **test Jan 26–31**. RMSE is measured in minutes.
 
-| Model | Val RMSE | Test RMSE | Size |
+| Model | Validation RMSE | Test RMSE | Serialized size |
 |---|---:|---:|---:|
-| Overall median | 9.9949 | 10.1225 | — |
-| Zone-pair median | 5.4437 | 5.4237 | — |
-| Random Forest baseline | 4.4771 | 4.4837 | — |
-| **Selected RF (trial-1)** | **4.4435** | **4.4415** | **112.4 MiB** |
+| Overall median (naive) | 9.9949 | 10.1225 | Not measured |
+| Zone-pair median (naive) | 5.4437 | 5.4237 | Not measured |
+| Random Forest baseline | 4.4771 | 4.4837 | 190.7 MiB |
+| **Selected RF · trial-1** | **4.4435** | **4.4415** | **112.4 MiB** |
 
-**Selection rule:** From 20 Optuna trials plus the RF baseline, choose the smallest model within **1% of the best validation RMSE**. Nine of 21 candidates qualified; the winner was only 0.34% above the best validation score.
+The selected model reduces test RMSE by **18.1%** relative to the zone-pair median baseline and is **41.1% smaller** than the RF baseline, with slightly better accuracy. Sizes are measured serialized model sizes, not Docker image or total deployment sizes.
 
-![Validation RMSE versus model size](docs/images/model-selection-rmse-vs-size.png)
+## Why this model?
 
-Model selection uses validation data, not test data. Earlier exploratory experiments inspected the January test period; an independent future-month evaluation remains future work.
+A lower error is useful only if the model is practical to serve. The selection rule was set in advance and uses **validation results**, not test performance:
+
+1. Evaluate the RF baseline and **20 Optuna trials** on the validation period.
+2. Keep models within **1% of the best validation RMSE**.
+3. Select the **smallest qualifying model** and then evaluate it on the test period.
+
+**Nine of 21** candidates qualified. The chosen model, `trial-1`, was just **0.34%** above the best validation RMSE, at **112.4 MiB**.
+
+![Validation RMSE against serialized model size, with the selected model and tolerance threshold](docs/images/model-selection-rmse-vs-size.png)
+
+[Selection notebook](notebooks/model_serving_selection.ipynb)
+
+The current pipeline selects without using test scores; earlier exploration did inspect the January test period, so an **independent later-month holdout** is still needed for a fully untouched evaluation.
 
 ## Architecture
 
-```mermaid
+```mermaid id="8f6p1a"
 flowchart LR
-    A["NYC TLC Data"] --> B["Clean & Split"]
-    B --> C["Feature Engineering"]
-    C --> D["Train & Tune"]
-    D --> E["Select on Validation"]
-    E --> F["Test & Register<br/>MLflow"]
-    F -->|"Manual promotion"| G["FastAPI<br/>Predict & Reload"]
-    G --> H["Prometheus"]
+    A["NYC TLC data"] --> B["Clean + chronological split"]
+    B --> C["Pickup-time features"]
+    C --> D["Baselines + Optuna"]
+    D --> E["Select on validation"]
+    E --> F["Test + MLflow registry"]
+    F -->|"Manual champion promotion"| G["FastAPI /predict + /reload"]
+    G --> H["Prometheus /metrics"]
 ```
 
-**Pipeline:** `uv run nyc-taxi all` runs data → train → tune → select. Registration does not automatically promote the model. See [model selection notebook](notebooks/model_serving_selection.ipynb) and [operations guide](docs/operations.md).
+The registry **does not automatically promote** new versions. An operator assigns the `champion` alias; authenticated `/reload` validates the candidate before swapping it in, and a failed reload leaves the current model serving. Training and inference share `src/features.py`.
 
-## Data Insights
+## What the data showed
 
-[Exploratory analysis](notebooks/exploration.ipynb) shows differences in trip duration by hour, weekday, and holiday.
+[Exploration notebook](notebooks/exploration.ipynb) · Training-period analysis informed the hour, weekday, and holiday features.
 
-![Trip duration by hour, weekday, and holiday](docs/images/time-patterns-hour-weekday-holiday.png)
+![Median trip duration by pickup hour, weekday and holiday](docs/images/time-patterns-hour-weekday-holiday.png)
 
-- **Time:** Median duration ranges from 10.4 min at 6 AM to 12.2 min at 2 PM.
-- **Weekday:** Thursday is slowest (12.1 min); Sunday is fastest (10.8 min).
-- **Cleaning:** 97.9% of trips fall within the retained 1–60 min range.
+- **Pickup time matters:** median duration rises from **10.4 min at 6 AM** to **12.2 min at 2 PM**.
+- **Days differ:** Thursday's median is **12.1 min**, compared with **10.8 min** on Sunday.
+- **Cleaning matters:** **97.9%** of recorded trips fall in the retained **1–60 min** duration range.
 
-![Trip duration distribution](docs/images/trip-duration-histogram.png)
+![Distribution of trip durations and the 1–60 minute retained range](docs/images/trip-duration-histogram.png)
 
 ## Quick Start
 
-```bash
+Requires `uv`, Docker, and Docker Compose. Configure credentials and `ADMIN_TOKEN` in `.env` before running.
+
+```bash id="qu4j2w"
 uv sync
-cp .env.example .env                 # Configure credentials and ADMIN_TOKEN
-docker compose up -d postgres mlflow
-uv run nyc-taxi all                  # Train, select, register
-uv run nyc-taxi verify <version>     # Verify registered model
+cp .env.example .env
+docker compose up -d postgres mlflow    # MLflow: http://localhost:5002
+uv run nyc-taxi all                     # data → train → tune → select; registers winner
+uv run nyc-taxi verify <version>        # verify the printed registered version
 ```
 
-Assign the verified version the `champion` alias in the MLflow UI, then start the API:
+In MLflow, assign the verified version the **`champion`** alias. Then start the API and load it:
 
-```bash
+```bash id="4f1ns9"
 docker compose up -d api
 export ADMIN_TOKEN="$(grep '^ADMIN_TOKEN=' .env | cut -d= -f2-)"
 curl -X POST http://localhost:8000/reload -H "X-Admin-Token: $ADMIN_TOKEN"
@@ -76,46 +91,48 @@ curl -X POST http://localhost:8000/predict \
   -d '{"PULocationID":161,"DOLocationID":236,"pickup_datetime":"2025-01-27T08:30:00"}'
 ```
 
+[Promotion, verification and rollback guide](docs/operations.md)
+
 ## API
 
-| Endpoint | Purpose |
+| Route | Purpose |
 |---|---|
-| `POST /predict` | Predict duration and return model version |
-| `POST /reload` | Authenticated, validated model hot reload |
-| `GET /live`, `/ready` | Liveness and model readiness |
-| `GET /health`, `/metrics` | Health status and Prometheus metrics |
+| `POST /predict` | Duration estimate in minutes and serving model version |
+| `POST /reload` | Authenticated, validated champion hot reload |
+| `GET /live` · `GET /ready` | Process liveness and model readiness |
+| `GET /health` · `GET /metrics` | Model/reload status and Prometheus metrics |
 
-Training and serving share `src/features.py`. Failed reloads preserve the previously serving model. See [operations guide](docs/operations.md).
+Inputs use NYC TLC zone IDs and **New York local pickup time**. Model artifacts include the feature schema and zone table; errors use consistent codes and request IDs.
 
-## Tests and CI
+## Quality and Benchmarks
 
-CI checks formatting, linting, types, dependency vulnerabilities, unit/API tests, Docker builds, and end-to-end model promotion and rollback.
+GitHub Actions checks formatting, lint, types, dependency security, unit/API tests, Docker builds, and isolated deployment tests covering promotion, upgrade, and rejection of invalid models. Prometheus reports request latency, counts, prediction errors, active model version, and reload failures.
 
-```bash
-uv run pytest
-uv run pytest -m e2e tests/e2e
-uv run python tests/load/run_load_test.py --users 1 10
-```
+**Measured Locust results** — local Docker deployment, MLflow **model version 8**, **2 minutes** per scenario; latency and RPS refer to `POST /predict` only.
 
-## Monitoring and Benchmarks
-
-Prometheus collects HTTP latency, request counts, prediction errors, active model version, and reload metrics. Start with `docker compose up -d prometheus`.
-
-**Locust benchmark:** Local Docker deployment, MLflow model version 8, two minutes per scenario.
-
-| Users | p50 | p95 | p99 | Prediction RPS | Errors | Peak RAM |
+| Concurrent users | p50 | p95 | p99 | Prediction RPS | Failures | Peak API RAM |
 |---|---:|---:|---:|---:|---:|---:|
 | 1 | 77 ms | 80 ms | 82 ms | 0.89 | 0% | 627.6 MiB |
 | 10 | 77 ms | 120 ms | 170 ms | 8.87 | 0% | 628.6 MiB |
 
-Median latency remained stable as concurrency increased, with **zero request failures**. Results describe this workload, not maximum API capacity.
+**Takeaway:** p50 held at **77 ms** with 10 simulated users and no observed failures. This measures the configured Locust workload, **not maximum throughput**; sampled RAM is container usage, not estimator size.
 
-[Benchmark procedure](docs/benchmarks.md) · [Prometheus UI](http://localhost:9090)
+```bash id="xt7v2b"
+uv run pytest
+uv run python tests/load/run_load_test.py --users 1 10
+docker compose up -d prometheus        # http://localhost:9090
+```
 
-## Limitations
+[Benchmark methodology](docs/benchmarks.md) · [Operations guide](docs/operations.md)
 
-- January 2025 only; no seasonal, traffic, or weather features.
-- Zone-level pickup/drop-off locations; no exact routes.
-- Predictions limited to trips lasting 1–60 minutes.
-- Random Forest training uses a 500,000-trip sample.
-- Future work: independent later-month evaluation, more training data, prediction intervals, and higher-concurrency stress tests.
+## Decisions and Limitations
+
+| Decision | Reason / trade-off |
+|---|---|
+| **Pickup-time inputs only** | Avoid features unavailable when a trip begins; zone centroids cannot capture actual routes or traffic. |
+| **Chronological validation** | Better matches future-trip inference than a random split; only January 2025 is represented. |
+| **Smallest model within 1%** | Preserves near-best predictive quality with a smaller serving artifact. |
+| **Manual promotion + safe reload** | Keeps model registration separate from deployment and preserves service on failed reload. |
+| **500k training-trip sample** | Controls training cost; fitting on all available trips remains to be assessed. |
+
+**Next:** evaluate on an untouched later month, add weather/traffic features, analyze errors by trip length and airport routes, estimate prediction intervals, and stress-test higher concurrency.
