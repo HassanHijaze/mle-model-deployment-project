@@ -45,7 +45,8 @@ def test_predict_rejects_invalid_input(client, bad_trip):
     assert r.status_code == 422
 
 
-def test_reload_endpoint_returns_versions(client, champion_version):
-    r = client.post("/reload")
+def test_reload_endpoint_returns_versions(client, champion_version, monkeypatch):
+    monkeypatch.setenv("ADMIN_TOKEN", "integration-test-token")
+    r = client.post("/reload", headers={"X-Admin-Token": "integration-test-token"})
     assert r.status_code == 200
     assert r.json()["current_version"] == champion_version

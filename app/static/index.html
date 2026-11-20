@@ -109,11 +109,10 @@
     const button = document.getElementById("go");
     const error = document.getElementById("error");
 
-    // Turn FastAPI's error "detail" (text, or a list of validation errors) into one message
-    function detailMessage(detail) {
-      if (typeof detail === "string") return detail;
-      if (Array.isArray(detail)) return detail.map((d) => d.msg).join(" ");
-      return null;
+    // Turn the API's JSON error ({code, message, request_id, details?}) into one message
+    function errorMessage(body) {
+      if (Array.isArray(body.details) && body.details.length) return body.details.map((d) => d.message).join(" ");
+      return typeof body.message === "string" ? body.message : null;
     }
 
     form.addEventListener("submit", async (event) => {
@@ -137,7 +136,7 @@
 
         if (!response.ok) {
           let message = null;
-          try { message = detailMessage((await response.json()).detail); } catch (_) {}
+          try { message = errorMessage(await response.json()); } catch (_) {}
           if (!message) {
             message = response.status === 422
               ? "Check the trip: zones must be between 1 and 265, and the pickup time must be set."

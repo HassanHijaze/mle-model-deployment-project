@@ -17,47 +17,52 @@ Time-based split on 1–60 minute trips: **train Jan 1–20 · validation Jan 21
 | Optuna-tuned | 4.466 | 4.462 |
 | **Final model** | –¹ | **4.312** |
 
-<sub>Baseline and tuned: 500k-trip sample. Final: tuned settings on all 2.7M Jan 1–25 trips
-(`n_estimators=200`, `max_depth=25`, `min_samples_leaf=8`, `max_features=0.5`).<br>
-¹ Trained on the validation days; the same settings trained on Jan 1–20 scored 4.344.</sub>
+
 
 **Takeaways**
 - The final model is **19% better** than the zone-pair median and **57% better** than a single guess.
 - **More data beat tuning:** tuning gained ~1%, training on all trips another ~3%.
-- **Trade-off:** the final model is several GB; the baseline is 4% worse but small enough for default Docker memory.
+- **Trade-off:** the final model is several GB; the baseline is 4% worse.
 
 Full analysis: [notebooks/exploration.ipynb](notebooks/exploration.ipynb)
 
 ### Model serving options
 
-Both models are registered in MLflow as `nyc-taxi-duration-rf`. Serve one by assigning it the `champion` alias.
+Both registered models are versions of `nyc-taxi-duration-rf`. Serve one by assigning it the `champion` alias.
+The final Jan 1–25 model (`rf-final-jan1-25`) is only scored, not logged: it is several GB.
 
-| Model | Test RMSE | Size | Memory |
-|---|---|---|---|
-| **Final** (`rf-final-jan1-25`) | 4.312 | several GB | requires increased Docker memory |
-| **Baseline** (`rf-baseline`) | 4.509 | small | runs with Docker defaults |
+| Model | Chosen by | Size |
+|---|---|---|
+| **Serving model** (`serving-selection`) | accuracy/size/RAM/latency rule, tested on February | under 700 MB |
+| **Baseline** (`rf-baseline`) | 50-tree baseline on a 500k sample | small |
 
 ## Quick Start
 
 ```bash
-uv sync
-cp .env.example .env && mkdir -p data
-docker compose up -d              # MLflow: localhost:5002 · API: localhost:8000
-uv run python -m src.train        # trains and registers both models
+uv sync && cp .env.example .env    # once
+docker compose up -d postgres mlflow
+uv run nyc-taxi all                # tunes, trains, selects and registers the models
 ```
 
-Assign the `champion` alias in the MLflow UI, then load it: `curl -X POST http://localhost:8000/reload`
-
-> **Memory:** if the API stops while loading the final model, serve the baseline or increase Docker's memory (`memory=12GB` in `%USERPROFILE%\.wslconfig` on Windows).
+`all` runs `data` → `tune` → `train` → `select` (also available one by one); models are registered without an alias.
+Check a version with `uv run nyc-taxi verify <version>`, set `champion` in the MLflow UI (localhost:5002),
+start the API with `docker compose up -d api`, then
+`curl -X POST http://localhost:8000/reload -H "X-Admin-Token: $ADMIN_TOKEN"`. The notebooks only read the results from MLflow.
 
 ## API
 
 | Endpoint | Description |
 |---|---|
-| `POST /predict` | Predicts trip duration |
-| `POST /reload` | Loads the current `champion` without restarting |
-| `GET /health` | Model and zone map status |
+| `POST /predict` | Predicts trip duration; the response names the model version that answered |
+| `POST /reload` | Loads the current `champion` as one bundle (model, zone table, feature schema), validates it, then swaps; needs `X-Admin-Token`. On failure the old model keeps serving |
+| `GET /live` | The process is alive |
+| `GET /ready` | A validated model is loaded (503 otherwise) |
+| `GET /health` | Model, zone table and last reload status |
 | `GET /` | Web form |
+
+Every response carries `X-Request-ID` (yours, or a new one). Errors share one JSON format:
+`{"code": ..., "message": ..., "request_id": ...}`. Logs are JSON lines. Promotion and rollback:
+[docs/operations.md](docs/operations.md).
 
 ```bash
 curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" \

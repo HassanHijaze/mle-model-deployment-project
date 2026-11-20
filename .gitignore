@@ -168,3 +168,7 @@ cython_debug/
 #.idea/
 data/
 mlartifacts/
+images/
+# Local MLflow databases and model files
+mlflow.db
+*.skops
