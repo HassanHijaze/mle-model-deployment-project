@@ -50,11 +50,14 @@ def test_successful_reload_swaps_the_model(api):
     assert client.post("/predict", json=TRIP).json()["duration_minutes"] == 20.0
 
 
-@pytest.mark.parametrize("headers, env, status, code", [
-    ({}, TOKEN, 401, "unauthorized"),
-    ({"X-Admin-Token": "wrong"}, TOKEN, 401, "unauthorized"),
-    (AUTH, None, 503, "reload_disabled"),
-])
+@pytest.mark.parametrize(
+    "headers, env, status, code",
+    [
+        ({}, TOKEN, 401, "unauthorized"),
+        ({"X-Admin-Token": "wrong"}, TOKEN, 401, "unauthorized"),
+        (AUTH, None, 503, "reload_disabled"),
+    ],
+)
 def test_reload_needs_the_admin_token(api, monkeypatch, headers, env, status, code):
     client, loader = api
     if env is None:
@@ -71,14 +74,20 @@ def bad_schema_bundle():
     return make_bundle("2", schema=schema)
 
 
-@pytest.mark.parametrize("bad_bundle, expected_problem", [
-    (bad_schema_bundle, "feature schema does not match FEATURES"),
-    (lambda: make_bundle("2", model=FakeModel(features=["a", "b"])), "model was trained on features"),
-    (lambda: make_bundle("2", zone_xy=None), "zone table zone_xy.csv missing"),
-    (lambda: make_bundle("2", model=FakeModel(fail=ValueError("corrupted tree"))), "test prediction failed"),
-    (lambda: make_bundle("2", model=FakeModel(minutes=np.nan)), "not all finite"),
-    (lambda: make_bundle("2", model=FakeModel(minutes=500.0)), "outside 1-60 min"),
-])
+@pytest.mark.parametrize(
+    "bad_bundle, expected_problem",
+    [
+        (bad_schema_bundle, "feature schema does not match FEATURES"),
+        (lambda: make_bundle("2", model=FakeModel(features=["a", "b"])), "model was trained on features"),
+        (lambda: make_bundle("2", zone_xy=None), "zone table zone_xy.csv missing"),
+        (
+            lambda: make_bundle("2", model=FakeModel(fail=ValueError("corrupted tree"))),
+            "test prediction failed",
+        ),
+        (lambda: make_bundle("2", model=FakeModel(minutes=np.nan)), "not all finite"),
+        (lambda: make_bundle("2", model=FakeModel(minutes=500.0)), "outside 1-60 min"),
+    ],
+)
 def test_invalid_bundle_is_rejected_and_old_model_keeps_serving(api, bad_bundle, expected_problem):
     client, loader = api
     loader["load"] = bad_bundle
@@ -151,6 +160,7 @@ def test_requests_during_a_slow_reload_use_the_old_model(api):
 
 def test_startup_without_model_then_reload(monkeypatch):
     monkeypatch.setenv("ADMIN_TOKEN", TOKEN)
+
     def no_champion():
         raise bundle_lib.BundleLoadError("no champion alias")
 

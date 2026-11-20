@@ -13,8 +13,14 @@ from __future__ import annotations
 
 import sys
 
-from src.bundle import (REFERENCE_TRIPS, BundleLoadError, fetch_bundle, predict_reference_trips,
-                        validate_bundle, version_differences)
+from src.bundle import (
+    REFERENCE_TRIPS,
+    BundleLoadError,
+    fetch_bundle,
+    predict_reference_trips,
+    validate_bundle,
+    version_differences,
+)
 
 MODEL_NAME = "nyc-taxi-duration-rf"
 
@@ -45,7 +51,8 @@ def verify_version(version: str | int, model_name: str = MODEL_NAME) -> int:
             print(f"  - {problem}")
         return 1
 
-    for (pu, do, when), minutes in zip(REFERENCE_TRIPS, predict_reference_trips(bundle.model, bundle.zone_xy)):
+    predictions = predict_reference_trips(bundle.model, bundle.zone_xy)
+    for (pu, do, when), minutes in zip(REFERENCE_TRIPS, predictions, strict=True):
         print(f"  {pu:>3} -> {do:<3} {when}: {minutes:.2f} min")
     print("OK")
     return 0

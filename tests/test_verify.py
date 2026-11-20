@@ -29,8 +29,10 @@ def registry(tmp_path, monkeypatch):
             path.write_text(json.dumps(good_schema() if isinstance(schema, str) else schema))
             files[bundle_lib.FEATURE_SCHEMA_FILE] = path
         state["files"][f"run-{version}"] = files
-        state["params"][version] = params or {"bundle_training_start": "2025-01-01",
-                                              "bundle_training_end": "2025-01-31"}
+        state["params"][version] = params or {
+            "bundle_training_start": "2025-01-01",
+            "bundle_training_end": "2025-01-31",
+        }
 
     def load_model(uri):
         model = state["models"][uri.rsplit("/", 1)[1]]
@@ -59,12 +61,18 @@ def test_verify_ok(registry, capsys):
     assert "161 -> 236" in out and "12.00 min" in out
 
 
-@pytest.mark.parametrize("kwargs, expected", [
-    ({"schema": {"features": [{"name": "hour", "dtype": "int32"}]}}, "feature schema does not match FEATURES"),
-    ({"zones": None}, "zone table zone_xy.csv missing"),
-    ({"model": FakeModel(minutes=float("nan"))}, "not all finite"),
-    ({"model": FakeModel(minutes=90.0)}, "outside 1-60 min"),
-])
+@pytest.mark.parametrize(
+    "kwargs, expected",
+    [
+        (
+            {"schema": {"features": [{"name": "hour", "dtype": "int32"}]}},
+            "feature schema does not match FEATURES",
+        ),
+        ({"zones": None}, "zone table zone_xy.csv missing"),
+        ({"model": FakeModel(minutes=float("nan"))}, "not all finite"),
+        ({"model": FakeModel(minutes=90.0)}, "outside 1-60 min"),
+    ],
+)
 def test_verify_reports_the_exact_problem(registry, capsys, kwargs, expected):
     registry(4, **kwargs)
     assert verify_mod.verify_version("4") == 1
@@ -98,8 +106,9 @@ def test_verify_warns_about_library_version_differences(registry, capsys):
 def test_cli_verify_runs_in_a_fresh_process(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "check_mlflow", lambda: "http://test")
-    monkeypatch.setattr(cli.subprocess, "run",
-                        lambda cmd, **kw: calls.append(cmd) or type("R", (), {"returncode": 1})())
+    monkeypatch.setattr(
+        cli.subprocess, "run", lambda cmd, **kw: calls.append(cmd) or type("R", (), {"returncode": 1})()
+    )
     assert cli.main(["verify", "12"]) == 1
     assert calls == [[sys.executable, "-m", "src.verify", "12"]]
 
@@ -115,8 +124,11 @@ def test_log_bundle_metadata_writes_schema_period_and_versions(monkeypatch):
     import mlflow
 
     logged = {}
-    monkeypatch.setattr(mlflow, "log_artifact",
-                        lambda path: logged.update(schema=json.loads(open(path, encoding="utf-8").read())))
+    monkeypatch.setattr(
+        mlflow,
+        "log_artifact",
+        lambda path: logged.update(schema=json.loads(open(path, encoding="utf-8").read())),
+    )
     monkeypatch.setattr(mlflow, "log_params", lambda params: logged.update(params=params))
     from src.features import FEATURES, build_features
 

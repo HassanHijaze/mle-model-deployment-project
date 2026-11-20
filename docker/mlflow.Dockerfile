@@ -3,4 +3,4 @@
 ARG MLFLOW_VERSION
 FROM ghcr.io/mlflow/mlflow:v${MLFLOW_VERSION}
 
-RUN pip install --no-cache-dir "psycopg[binary]"
+RUN pip install --no-cache-dir "psycopg[binary]==3.3.9"

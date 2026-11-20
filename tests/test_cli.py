@@ -7,19 +7,21 @@ import pytest
 
 from src import cli
 
-
 STEP_ORDER = ["data", "tune", "train", "select"]
 
 
 def record_steps(monkeypatch, calls, fail_at=None):
     """Replace every step with a mock that records its name (and fails at fail_at)."""
+
     def make(name):
         def step():
             calls.append(name)
             if name == fail_at:
                 raise RuntimeError(f"{name} failed")
             return {}
+
         return step
+
     monkeypatch.setattr(cli, "STEPS", {name: make(name) for name in STEP_ORDER})
 
 

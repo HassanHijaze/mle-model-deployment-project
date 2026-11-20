@@ -15,7 +15,7 @@ from sklearn.metrics import mean_absolute_error, root_mean_squared_error, root_m
 
 TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5002")
 EXPERIMENT = "nyc-taxi-duration"
-ZONE_FILE = "zone_xy.csv"   # zone table logged with every model, loaded by the API
+ZONE_FILE = "zone_xy.csv"  # zone table logged with every model, loaded by the API
 
 
 def fit_and_score(params, X_train, y_train, X_eval, y_eval, eval_name="val"):
@@ -57,21 +57,33 @@ def log_model_artifacts(model, zone_xy=None, register_name=None, X=None, trainin
             zone_xy.to_csv(path)
             mlflow.log_artifact(str(path))
     model_info = mlflow.sklearn.log_model(
-        model, name="model",
+        model,
+        name="model",
         skops_trusted_types=["sklearn.tree._tree.Tree"],
         registered_model_name=register_name,
     )
     if not register_name:
         return None
     version = str(model_info.registered_model_version)
-    print(f"Registered {register_name} version {version} "
-          f"(no alias set - set 'champion' in the MLflow UI if you want to serve it)")
+    print(
+        f"Registered {register_name} version {version} "
+        f"(no alias set - set 'champion' in the MLflow UI if you want to serve it)"
+    )
     return version
 
 
-def log_model_run(model, params, metrics, features, run_name,
-                  experiment=EXPERIMENT, register_name=None, zone_xy=None,
-                  X=None, training_period=None):
+def log_model_run(
+    model,
+    params,
+    metrics,
+    features,
+    run_name,
+    experiment=EXPERIMENT,
+    register_name=None,
+    zone_xy=None,
+    X=None,
+    training_period=None,
+):
     """Log an already trained model to MLflow in a new run, with its params and metrics.
 
     See log_model_artifacts() for the zone table, the bundle metadata (X,
@@ -85,21 +97,32 @@ def log_model_run(model, params, metrics, features, run_name,
         mlflow.log_params(params)
         mlflow.log_param("features", ",".join(features))
         mlflow.log_metrics(metrics)
-        version = log_model_artifacts(model, zone_xy=zone_xy, register_name=register_name,
-                                      X=X, training_period=training_period)
+        version = log_model_artifacts(
+            model, zone_xy=zone_xy, register_name=register_name, X=X, training_period=training_period
+        )
 
     print(run_name, {k: round(v, 4) for k, v in metrics.items()})
     return version
 
 
-def train_and_log(params, X_train, y_train, X_eval, y_eval, run_name,
-                  eval_name="val", experiment=EXPERIMENT, register_name=None,
-                  zone_xy=None):
+def train_and_log(
+    params,
+    X_train,
+    y_train,
+    X_eval,
+    y_eval,
+    run_name,
+    eval_name="val",
+    experiment=EXPERIMENT,
+    register_name=None,
+    zone_xy=None,
+):
     """Fit the model, score it on (X_eval, y_eval), and log everything to MLflow.
 
     Returns the fitted model and a dict of metrics.
     """
     model, metrics = fit_and_score(params, X_train, y_train, X_eval, y_eval, eval_name)
-    log_model_run(model, params, metrics, X_train.columns, run_name,
-                  experiment, register_name, zone_xy, X=X_train)
+    log_model_run(
+        model, params, metrics, X_train.columns, run_name, experiment, register_name, zone_xy, X=X_train
+    )
     return model, metrics

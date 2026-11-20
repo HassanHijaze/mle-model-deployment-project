@@ -38,6 +38,7 @@ import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -58,12 +59,33 @@ TABLE_FILE = "candidates_ranked.csv"
 SIZE_CHART_FILE = "accuracy_vs_size.png"
 LATENCY_CHART_FILE = "accuracy_vs_latency.png"
 RULE_FILE = "selection_rule.txt"
-TABLE_COLUMNS = ["candidate", "status", "val_rmse", "rmse_vs_best_pct", "val_mae", "size_mb",
-                 "peak_ram_mb", "load_s", "latency_p50_ms", "latency_p95_ms", "latency_p99_ms",
-                 "single_throughput_rps", "batch_1000_ms", "batch_throughput_rows_s"]
-BENCHMARK_COLUMNS = ["size_mb", "peak_ram_mb", "load_s", "latency_p50_ms", "latency_p95_ms",
-                     "latency_p99_ms", "single_throughput_rps", "batch_1000_ms",
-                     "batch_throughput_rows_s"]
+TABLE_COLUMNS = [
+    "candidate",
+    "status",
+    "val_rmse",
+    "rmse_vs_best_pct",
+    "val_mae",
+    "size_mb",
+    "peak_ram_mb",
+    "load_s",
+    "latency_p50_ms",
+    "latency_p95_ms",
+    "latency_p99_ms",
+    "single_throughput_rps",
+    "batch_1000_ms",
+    "batch_throughput_rows_s",
+]
+BENCHMARK_COLUMNS = [
+    "size_mb",
+    "peak_ram_mb",
+    "load_s",
+    "latency_p50_ms",
+    "latency_p95_ms",
+    "latency_p99_ms",
+    "single_throughput_rps",
+    "batch_1000_ms",
+    "batch_throughput_rows_s",
+]
 
 # ---------------------------------------------------------------------------------
 # Candidates
@@ -282,18 +304,20 @@ def train_family(
         small = slice_forest(forest, n)
         path = model_dir / f"{family.candidate_name(n)}.skops"
         size_mb = save_skops(small, path)
-        rows.append({
-            "candidate": family.candidate_name(n),
-            "family": family.name,
-            "n_trees": n,
-            **{k: v for k, v in family.params.items()},
-            **regression_metrics(val_df["duration"], pred, prefix="val_"),
-            **segment_metrics(val_df, pred, masks),
-            "size_mb": size_mb,
-            "nodes": node_count(small),
-            "family_fit_s": fit_s,
-            "model_path": str(path),
-        })
+        rows.append(
+            {
+                "candidate": family.candidate_name(n),
+                "family": family.name,
+                "n_trees": n,
+                **{k: v for k, v in family.params.items()},
+                **regression_metrics(val_df["duration"], pred, prefix="val_"),
+                **segment_metrics(val_df, pred, masks),
+                "size_mb": size_mb,
+                "nodes": node_count(small),
+                "family_fit_s": fit_s,
+                "model_path": str(path),
+            }
+        )
         del small
     del forest
     return pd.DataFrame(rows)
@@ -336,7 +360,7 @@ def _peak_rss_mb() -> float:
     import psutil
 
     info = psutil.Process().memory_info()
-    if hasattr(info, "peak_wset"):  # Windows
+    if sys.platform == "win32":
         return info.peak_wset / 2**20
     import resource
 
@@ -357,8 +381,8 @@ def run_benchmark(model_path: Path, bench_path: Path) -> dict:
     the API), 1-row pandas DataFrames with the feature names, 50 warm-up requests, then 1,000
     timed sequential requests on different rows; batch = 1,000 rows, median of 7 runs.
     """
-    import skops.io as sio
     import sklearn.ensemble  # noqa: F401  (counted in the baseline memory, not in the model)
+    import skops.io as sio
 
     X = pd.read_parquet(bench_path)
     rss_before_mb = _current_rss_mb()
@@ -404,8 +428,16 @@ def run_benchmark(model_path: Path, bench_path: Path) -> dict:
 
 def measure_in_fresh_process(model_path: Path, bench_path: Path, timeout_s: int = 1800) -> dict:
     """Run run_benchmark() in a new Python process, so the RAM numbers only contain this model."""
-    cmd = [sys.executable, "-m", "src.serving_selection", "measure",
-           "--model", str(model_path), "--bench", str(bench_path)]
+    cmd = [
+        sys.executable,
+        "-m",
+        "src.serving_selection",
+        "measure",
+        "--model",
+        str(model_path),
+        "--bench",
+        str(bench_path),
+    ]
     env = {**os.environ, "PYTHONPATH": str(ROOT)}
     result = subprocess.run(cmd, cwd=ROOT, env=env, capture_output=True, text=True, timeout=timeout_s)
     if result.returncode != 0:
@@ -459,8 +491,10 @@ def apply_policy(results: pd.DataFrame, policy: SelectionPolicy = SelectionPolic
     for row in df.itertuples():
         why = []
         if row.val_rmse > rmse_limit:
-            why.append(f"RMSE {row.val_rmse:.4f} is {row.rmse_vs_best_pct:.2f}% above best "
-                       f"{best_rmse:.4f} (limit {policy.rmse_tolerance:.0%})")
+            why.append(
+                f"RMSE {row.val_rmse:.4f} is {row.rmse_vs_best_pct:.2f}% above best "
+                f"{best_rmse:.4f} (limit {policy.rmse_tolerance:.0%})"
+            )
         if row.size_mb >= policy.max_size_mb:
             why.append(f"size {row.size_mb:,.0f} MB >= {policy.max_size_mb:,.0f} MB budget")
         if pd.isna(getattr(row, "peak_ram_mb", np.nan)):
@@ -479,13 +513,19 @@ def apply_policy(results: pd.DataFrame, policy: SelectionPolicy = SelectionPolic
     for idx in eligible.index[1:]:
         r = df.loc[idx]
         if r["peak_ram_mb"] > w["peak_ram_mb"]:
-            df.loc[idx, "reason"] = (f"eligible, but peak RAM {r['peak_ram_mb']:,.0f} MB > "
-                                     f"{w['peak_ram_mb']:,.0f} MB of {w['candidate']}")
+            df.loc[idx, "reason"] = (
+                f"eligible, but peak RAM {r['peak_ram_mb']:,.0f} MB > "
+                f"{w['peak_ram_mb']:,.0f} MB of {w['candidate']}"
+            )
         else:
-            df.loc[idx, "reason"] = (f"eligible, same peak RAM but p95 {r['latency_p95_ms']:.2f} ms >= "
-                                     f"{w['latency_p95_ms']:.2f} ms of {w['candidate']}")
-    return df.sort_values(["status", "val_rmse"], key=lambda s: s.map(
-        {"selected": 0, "eligible": 1, "rejected": 2}) if s.name == "status" else s)
+            df.loc[idx, "reason"] = (
+                f"eligible, same peak RAM but p95 {r['latency_p95_ms']:.2f} ms >= "
+                f"{w['latency_p95_ms']:.2f} ms of {w['candidate']}"
+            )
+    return df.sort_values(
+        ["status", "val_rmse"],
+        key=lambda s: s.map({"selected": 0, "eligible": 1, "rejected": 2}) if s.name == "status" else s,
+    )
 
 
 # ---------------------------------------------------------------------------------
@@ -505,12 +545,16 @@ def log_datasets(datasets: dict[str, pd.DataFrame], source: str) -> None:
 
     for context, df in datasets.items():
         pickup = df["tpep_pickup_datetime"]
-        mlflow.log_params({
-            f"{context}_start": f"{pickup.min():%Y-%m-%d}",
-            f"{context}_end": f"{pickup.max():%Y-%m-%d}",
-            f"{context}_rows": len(df),
-        })
-        ds = mlflow.data.from_pandas(df, source=source, name=f"yellow-taxi-{context}")
+        mlflow.log_params(
+            {
+                f"{context}_start": f"{pickup.min():%Y-%m-%d}",
+                f"{context}_end": f"{pickup.max():%Y-%m-%d}",
+                f"{context}_rows": len(df),
+            }
+        )
+        ds = mlflow.data.from_pandas(  # type: ignore[attr-defined]  # exported lazily by mlflow.data
+            df, source=source, name=f"yellow-taxi-{context}"
+        )
         mlflow.log_input(ds, context=context)
 
 
@@ -526,8 +570,10 @@ def latest_run(run_name: str, experiment: str = "nyc-taxi-duration"):
         output_format="list",
     )
     if not runs:
-        raise LookupError(f"No finished '{run_name}' run in MLflow experiment '{experiment}'. "
-                          "Run `uv run nyc-taxi all` first (MLflow server must be running).")
+        raise LookupError(
+            f"No finished '{run_name}' run in MLflow experiment '{experiment}'. "
+            "Run `uv run nyc-taxi all` first (MLflow server must be running)."
+        )
     return runs[0]
 
 
@@ -535,8 +581,9 @@ def child_runs(parent_run_id: str, experiment: str = "nyc-taxi-duration") -> pd.
     """All child runs of a parent run as a DataFrame (columns params.*, metrics.*, tags.*)."""
     import mlflow
 
-    return mlflow.search_runs(experiment_names=[experiment],
-                              filter_string=f"tags.mlflow.parentRunId = '{parent_run_id}'")
+    return mlflow.search_runs(
+        experiment_names=[experiment], filter_string=f"tags.mlflow.parentRunId = '{parent_run_id}'"
+    )
 
 
 def download_run_file(run_id: str, name: str) -> Path:
@@ -550,8 +597,7 @@ def registered_version(run_id: str, model_name: str) -> str | None:
     """Model-registry version created from this run, if any."""
     from mlflow import MlflowClient
 
-    versions = [v for v in MlflowClient().search_model_versions(f"run_id='{run_id}'")
-                if v.name == model_name]
+    versions = [v for v in MlflowClient().search_model_versions(f"run_id='{run_id}'") if v.name == model_name]
     return str(max(int(v.version) for v in versions)) if versions else None
 
 
@@ -596,9 +642,16 @@ BASELINE_LINE_STYLES = {"Overall median": ":", "Zone-pair median": "-.", "RF bas
 OFF_CHART_FACTOR = 1.5  # baselines above 1.5x the worst candidate RMSE are listed, not drawn
 
 
-def plot_tradeoff(ranked: pd.DataFrame, xcol: str, xlabel: str, title: str,
-                  policy: SelectionPolicy, size_budget: bool = False,
-                  baselines: dict[str, float] | None = None, path: Path | None = None):
+def plot_tradeoff(
+    ranked: pd.DataFrame,
+    xcol: str,
+    xlabel: str,
+    title: str,
+    policy: SelectionPolicy,
+    size_budget: bool = False,
+    baselines: dict[str, float] | None = None,
+    path: Path | None = None,
+):
     """Scatter of validation RMSE against one serving cost, coloured by status.
 
     baselines: {label: validation RMSE} drawn as horizontal reference lines (the baseline
@@ -608,28 +661,44 @@ def plot_tradeoff(ranked: pd.DataFrame, xcol: str, xlabel: str, title: str,
     """
     from matplotlib.figure import Figure
 
-    colors = ranked["status"].map({"selected": "tab:green", "eligible": "tab:blue",
-                                   "rejected": "tab:grey"})
+    colors = ranked["status"].map({"selected": "tab:green", "eligible": "tab:blue", "rejected": "tab:grey"})
     fig = Figure(figsize=(7.5, 5.5))
     ax = fig.subplots()
     ax.scatter(ranked[xcol], ranked["val_rmse"], c=colors, s=60)
     for row in ranked.itertuples():
-        ax.annotate(row.candidate, (getattr(row, xcol), row.val_rmse), fontsize=8,
-                    xytext=(4, 3), textcoords="offset points")
-    ax.axhline(ranked["val_rmse"].min() * (1 + policy.rmse_tolerance), color="tab:red",
-               linestyle="--", label=f"best RMSE + {policy.rmse_tolerance:.0%}")
+        ax.annotate(
+            row.candidate,
+            (getattr(row, xcol), row.val_rmse),
+            fontsize=8,
+            xytext=(4, 3),
+            textcoords="offset points",
+        )
+    ax.axhline(
+        ranked["val_rmse"].min() * (1 + policy.rmse_tolerance),
+        color="tab:red",
+        linestyle="--",
+        label=f"best RMSE + {policy.rmse_tolerance:.0%}",
+    )
     worst = ranked["val_rmse"].max()
     for label, rmse in (baselines or {}).items():
         if not np.isfinite(rmse):
             continue
-        style = {"color": "black", "linewidth": 1, "linestyle": BASELINE_LINE_STYLES.get(label, ":")}
+        style: dict[str, Any] = {
+            "color": "black",
+            "linewidth": 1,
+            "linestyle": BASELINE_LINE_STYLES.get(label, ":"),
+        }
         if rmse <= OFF_CHART_FACTOR * worst:
             ax.axhline(rmse, label=f"{label} ({rmse:.3f})", **style)
         else:  # far above every candidate: a line would squash the candidates, list it instead
             ax.plot([], [], label=f"{label} ({rmse:.3f}, above chart)", **style)
     if size_budget:
-        ax.axvline(policy.max_size_mb, color="tab:orange", linestyle="--",
-                   label=f"size budget {policy.max_size_mb:,.0f} MB")
+        ax.axvline(
+            policy.max_size_mb,
+            color="tab:orange",
+            linestyle="--",
+            label=f"size budget {policy.max_size_mb:,.0f} MB",
+        )
     ax.set(xlabel=xlabel, ylabel="validation RMSE (min)", title=title)
     ax.grid(alpha=0.3)
     ax.legend(fontsize=8)
@@ -676,8 +745,9 @@ def log_candidate_runs(ranked: pd.DataFrame) -> None:
                 mlflow.set_tag("benchmark_error", row["benchmark_error"])
 
 
-def holdout_metrics(model, train_df: pd.DataFrame, holdout_df: pd.DataFrame,
-                    zone_xy: pd.DataFrame) -> dict[str, float]:
+def holdout_metrics(
+    model, train_df: pd.DataFrame, holdout_df: pd.DataFrame, zone_xy: pd.DataFrame
+) -> dict[str, float]:
     """February metrics of the serving model and of the zone-pair median (same training trips).
 
     Keys: holdout_rmse/mae, holdout_<segment>_rmse/mae, holdout_<segment>_trips,
@@ -692,8 +762,9 @@ def holdout_metrics(model, train_df: pd.DataFrame, holdout_df: pd.DataFrame,
     out.update({f"holdout_{k}": v for k, v in segment_metrics(holdout_df, pred, masks).items()})
     out.update({f"holdout_{k}_trips": float(n) for k, n in segment_sizes(masks).items()})
     out.update(regression_metrics(holdout_df["duration"], base, prefix="holdout_zone_pair_median_"))
-    out.update({f"holdout_zone_pair_median_{k}": v
-                for k, v in segment_metrics(holdout_df, base, masks).items()})
+    out.update(
+        {f"holdout_zone_pair_median_{k}": v for k, v in segment_metrics(holdout_df, base, masks).items()}
+    )
     return out
 
 
@@ -706,7 +777,7 @@ def machine_info() -> dict[str, str]:
 
     return {
         "machine_cpu": f"{platform.processor() or platform.machine()} "
-                       f"({psutil.cpu_count(logical=False)} cores / {psutil.cpu_count()} threads)",
+        f"({psutil.cpu_count(logical=False)} cores / {psutil.cpu_count()} threads)",
         "machine_ram_gb": f"{psutil.virtual_memory().total / 2**30:.1f}",
         "machine_os": platform.platform(),
         "python_version": platform.python_version(),
@@ -750,19 +821,28 @@ def run_selection(policy: SelectionPolicy = SelectionPolicy(), out_dir: Path = O
     print("validation:", describe_period(val_df))
 
     with mlflow.start_run(run_name=PARENT_RUN_NAME) as parent:
-        mlflow.log_params({"rmse_tolerance": policy.rmse_tolerance, "max_size_mb": policy.max_size_mb,
-                           **{f"reference_{k}": v for k, v in tuned_params.items()},
-                           "params_source": params_source, **machine_info()})
+        mlflow.log_params(
+            {
+                "rmse_tolerance": policy.rmse_tolerance,
+                "max_size_mb": policy.max_size_mb,
+                **{f"reference_{k}": v for k, v in tuned_params.items()},
+                "params_source": params_source,
+                **machine_info(),
+            }
+        )
         log_datasets({"training": train_df, "validation": val_df}, source=DATA_URL)
 
         # 1. Candidates (one fit per family; a candidate is the first n trees of its family)
         families = candidate_families(tuned_params)
         parts = []
         for family in families:
-            print(f"training {family.name}: {family.params}, up to {max(family.tree_counts)} trees ...",
-                  flush=True)
-            parts.append(train_family(family, X_train, y_train, X_val, val_df, masks,
-                                      model_dir=out_dir / "models"))
+            print(
+                f"training {family.name}: {family.params}, up to {max(family.tree_counts)} trees ...",
+                flush=True,
+            )
+            parts.append(
+                train_family(family, X_train, y_train, X_val, val_df, masks, model_dir=out_dir / "models")
+            )
             gc.collect()
         results = pd.concat(parts, ignore_index=True)
 
@@ -773,8 +853,10 @@ def run_selection(policy: SelectionPolicy = SelectionPolicy(), out_dir: Path = O
         # 3. Selection rule, child runs and comparison artifacts
         ranked = apply_policy(results, policy)
         selected = ranked[ranked["status"] == "selected"].iloc[0]
-        print(f"selected: {selected['candidate']} (val RMSE {selected['val_rmse']:.4f}, "
-              f"{selected['size_mb']:,.0f} MB, peak RAM {selected['peak_ram_mb']:,.0f} MB)")
+        print(
+            f"selected: {selected['candidate']} (val RMSE {selected['val_rmse']:.4f}, "
+            f"{selected['size_mb']:,.0f} MB, peak RAM {selected['peak_ram_mb']:,.0f} MB)"
+        )
         log_candidate_runs(ranked)
 
         table_path = out_dir / TABLE_FILE
@@ -782,16 +864,37 @@ def run_selection(policy: SelectionPolicy = SelectionPolicy(), out_dir: Path = O
         rule_path = out_dir / RULE_FILE
         rule_path.write_text(selection_rule_text(policy), encoding="utf-8")
         charts = [out_dir / SIZE_CHART_FILE, out_dir / LATENCY_CHART_FILE]
-        plot_tradeoff(ranked, "size_mb", "serialized size (MB, skops)", "Accuracy vs size", policy,
-                      size_budget=True, baselines=baselines, path=charts[0])
-        plot_tradeoff(ranked, "latency_p95_ms", "single-request p95 latency (ms)", "Accuracy vs latency",
-                      policy, baselines=baselines, path=charts[1])
+        plot_tradeoff(
+            ranked,
+            "size_mb",
+            "serialized size (MB, skops)",
+            "Accuracy vs size",
+            policy,
+            size_budget=True,
+            baselines=baselines,
+            path=charts[0],
+        )
+        plot_tradeoff(
+            ranked,
+            "latency_p95_ms",
+            "single-request p95 latency (ms)",
+            "Accuracy vs latency",
+            policy,
+            baselines=baselines,
+            path=charts[1],
+        )
         for path in (table_path, rule_path, *charts):
             mlflow.log_artifact(str(path))
         mlflow.set_tag("selected_candidate", selected["candidate"])
-        mlflow.log_metrics(_finite_metrics({
-            "selected_val_rmse": selected["val_rmse"], "selected_val_mae": selected["val_mae"],
-            **{f"selected_{k}": selected[k] for k in BENCHMARK_COLUMNS}}))
+        mlflow.log_metrics(
+            _finite_metrics(
+                {
+                    "selected_val_rmse": selected["val_rmse"],
+                    "selected_val_mae": selected["val_mae"],
+                    **{f"selected_{k}": selected[k] for k in BENCHMARK_COLUMNS},
+                }
+            )
+        )
 
         # 4. Repeatability: refit from scratch with exactly n trees, compare with the measured model
         family = next(f for f in families if f.name == selected["family"])
@@ -799,8 +902,9 @@ def run_selection(policy: SelectionPolicy = SelectionPolicy(), out_dir: Path = O
         selected_params = {**family.params, "n_estimators": n_trees}
         mlflow.log_params({f"selected_{k}": v for k, v in selected_params.items()})
         measured_model = sio.load(selected["model_path"], trusted=SKOPS_TRUSTED_TYPES)
-        repeat = check_repeatability(family.params, n_trees, X_train, y_train, X_val,
-                                     measured_model.predict(X_val))
+        repeat = check_repeatability(
+            family.params, n_trees, X_train, y_train, X_val, measured_model.predict(X_val)
+        )
         del measured_model
         print("repeatability:", repeat)
         mlflow.log_metric("repeat_max_abs_diff", repeat["max_abs_diff_fresh_vs_sliced"])
@@ -821,23 +925,31 @@ def run_selection(policy: SelectionPolicy = SelectionPolicy(), out_dir: Path = O
         holdout["serving_model_size_mb"] = save_skops(serving_model, out_dir / "serving_model.skops")
         mlflow.log_metrics(_finite_metrics(holdout))
         log_datasets({"final_training": jan_all, "holdout": feb}, source=DATA_URL)
-        print(f"February holdout: RMSE {holdout['holdout_rmse']:.4f}, MAE {holdout['holdout_mae']:.4f} "
-              f"(zone-pair median RMSE {holdout['holdout_zone_pair_median_rmse']:.4f})")
+        print(
+            f"February holdout: RMSE {holdout['holdout_rmse']:.4f}, MAE {holdout['holdout_mae']:.4f} "
+            f"(zone-pair median RMSE {holdout['holdout_zone_pair_median_rmse']:.4f})"
+        )
 
         # 6. Register WITHOUT an alias (model + zone table in this parent run, as the API expects)
         from src.bundle import period_of
 
-        version = log_model_artifacts(serving_model, zone_xy=zone_xy, register_name=MODEL_NAME,
-                                      X=X_all, training_period=period_of(jan_all))
+        version = log_model_artifacts(
+            serving_model,
+            zone_xy=zone_xy,
+            register_name=MODEL_NAME,
+            X=X_all,
+            training_period=period_of(jan_all),
+        )
         mlflow.set_tag("registered_version", version)
         champion_after = alias_version(MODEL_NAME, "champion")
         if champion_after != champion_before:
             raise RuntimeError("champion alias changed - it must only be moved by hand")
 
-    print(f"Registered {MODEL_NAME} version {version} (run {parent.info.run_id}); "
-          f"champion still -> {champion_after}")
-    return {"run_id": parent.info.run_id, "selected": selected["candidate"],
-            "registered_version": version}
+    print(
+        f"Registered {MODEL_NAME} version {version} (run {parent.info.run_id}); "
+        f"champion still -> {champion_after}"
+    )
+    return {"run_id": parent.info.run_id, "selected": selected["candidate"], "registered_version": version}
 
 
 # ---------------------------------------------------------------------------------
@@ -846,7 +958,9 @@ def run_selection(policy: SelectionPolicy = SelectionPolicy(), out_dir: Path = O
 
 
 def main(argv: list[str] | None = None) -> None:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("run", help="train, benchmark, select, evaluate on February and register (no alias)")
     m = sub.add_parser("measure", help="benchmark one skops model in this (fresh) process")

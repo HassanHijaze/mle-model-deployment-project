@@ -21,8 +21,9 @@ from src.experiment import EXPERIMENT, TRACKING_URI
 N_TRIALS = 20
 
 
-def tune_random_forest(X_train, y_train, X_val, y_val, n_trials=N_TRIALS, seed=42,
-                       experiment=EXPERIMENT, extra_params=None):
+def tune_random_forest(
+    X_train, y_train, X_val, y_val, n_trials=N_TRIALS, seed=42, experiment=EXPERIMENT, extra_params=None
+):
     """Search Random Forest settings on validation RMSE.
 
     Each trial is logged as a child run under one parent run "optuna-tuning".
@@ -50,8 +51,7 @@ def tune_random_forest(X_train, y_train, X_val, y_val, n_trials=N_TRIALS, seed=4
     with mlflow.start_run(run_name="optuna-tuning"):
         if extra_params:
             mlflow.log_params(extra_params)
-        study = optuna.create_study(direction="minimize",
-                                    sampler=optuna.samplers.TPESampler(seed=seed))
+        study = optuna.create_study(direction="minimize", sampler=optuna.samplers.TPESampler(seed=seed))
         study.optimize(objective, n_trials=n_trials)
         mlflow.log_params({f"best_{k}": v for k, v in study.best_params.items()})
         mlflow.log_metric("best_val_rmse", study.best_value)
@@ -74,11 +74,19 @@ def main(n_trials: int = N_TRIALS) -> dict:
     tr, va, _ = split_by_time(sample)
     print(f"Sample: train {tr.sum():,}  validation {va.sum():,} (test days not used)")
 
-    study = tune_random_forest(X[tr], y[tr], X[va], y[va], n_trials=n_trials,
-                               extra_params={"sample_size": len(sample), "n_trials": n_trials})
+    study = tune_random_forest(
+        X[tr],
+        y[tr],
+        X[va],
+        y[va],
+        n_trials=n_trials,
+        extra_params={"sample_size": len(sample), "n_trials": n_trials},
+    )
     if study.best_params != BEST_PARAMS:
-        print(f"Note: the best params differ from the fallback BEST_PARAMS in src/train.py "
-              f"{BEST_PARAMS}; train and select use the new ones from MLflow.")
+        print(
+            f"Note: the best params differ from the fallback BEST_PARAMS in src/train.py "
+            f"{BEST_PARAMS}; train and select use the new ones from MLflow."
+        )
     return {"best_params": study.best_params, "best_val_rmse": study.best_value}
 
 

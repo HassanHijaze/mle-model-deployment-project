@@ -1,6 +1,10 @@
-# Runs on every push and pull request:
-#   - tests: unit and data tests (model/API tests skip themselves, since CI has no MLflow server)
-#   - docker: checks that the API image still builds
+# Runs on every push to main and on pull requests:
+#   lint      ruff format check, ruff lint, mypy (src/ and app/)
+#   security  pip-audit on every locked dependency (runtime + dev)
+#   tests     unit and API tests with fake models (model/MLflow tests skip themselves: no server)
+#   docker    builds the API and MLflow images
+#   e2e       docker compose stack (postgres, mlflow, api) with synthetic models: promote,
+#             upgrade, reject a broken version (tests/e2e); always torn down
 name: CI
 
 on:
@@ -8,31 +12,100 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  UV_VERSION: "0.13.5"
+
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: ruff format
+        run: uv run ruff format --check .
+      - name: ruff lint
+        run: uv run ruff check .
+      - name: mypy
+        run: uv run mypy
+
+  security:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: Export locked dependencies (with hashes)
+        run: uv export --frozen --all-groups --no-emit-project --format requirements-txt -o requirements-audit.txt
+      - name: pip-audit
+        run: uv run pip-audit -r requirements-audit.txt --require-hashes --disable-pip --progress-spinner off
+
   tests:
     runs-on: ubuntu-latest
     env:
-      # No MLflow server in CI: fail fast instead of retrying, so those tests skip quickly
+      # No MLflow server here: fail fast instead of retrying, so those tests skip quickly
       MLFLOW_HTTP_REQUEST_MAX_RETRIES: "0"
       MLFLOW_HTTP_REQUEST_TIMEOUT: "5"
     steps:
       - uses: actions/checkout@v4
-
       - uses: astral-sh/setup-uv@v6
         with:
-          version: "0.13.5"
+          version: ${{ env.UV_VERSION }}
           enable-cache: true
-
       - name: Install dependencies
         run: uv sync --frozen
-
-      - name: Run tests
+      - name: Unit and API tests
         run: uv run pytest -rs
 
   docker:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
       - name: Build the API image
         run: docker build -t nyc-taxi-api .
+      - name: Build the MLflow image (same mlflow version as uv.lock)
+        run: |
+          MLFLOW_VERSION=$(uv export --frozen --no-hashes --format requirements-txt | sed -n 's/^mlflow==//p')
+          docker build -f docker/mlflow.Dockerfile --build-arg MLFLOW_VERSION="$MLFLOW_VERSION" -t nyc-taxi-mlflow .
+
+  e2e:
+    runs-on: ubuntu-latest
+    needs: docker
+    env:
+      # Test-only values for the throwaway stack; never real secrets
+      E2E_ADMIN_TOKEN: e2e-ci-admin-token
+      E2E_POSTGRES_USER: e2e
+      E2E_POSTGRES_PASSWORD: e2e-ci-password
+      E2E_MLFLOW_PORT: "15002"
+      E2E_API_PORT: "18000"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --frozen
+      - name: End-to-end test (docker compose)
+        run: uv run pytest -m e2e tests/e2e -rs -v
+      - name: Tear down the stack
+        if: always()
+        run: docker compose -p nyc-taxi-e2e down -v --remove-orphans

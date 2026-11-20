@@ -35,14 +35,37 @@ dev = [
     "ipykernel>=7.3.0",
     "ipywidgets>=8.1.9",
     "matplotlib>=3.11.2",
+    "mypy>=2.4.1",
     "nbformat>=5.11.1",
     "optuna>=5.1.0",
     "pip>=26.3",
+    "pip-audit>=2.10.1",
     "pytest>=9.1.1",
+    "ruff>=0.17.6",
 ]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+# End-to-end tests start docker compose; run them explicitly with `uv run pytest -m e2e`
+addopts = "-m 'not e2e'"
+markers = ["e2e: end-to-end test against a docker compose stack (postgres, mlflow, api)"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py313"
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, import order, bugbear, pyupgrade
+select = ["E", "F", "I", "B", "UP"]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src", "app"]
+ignore_missing_imports = true   # pandas, scikit-learn, mlflow, ... ship no type information
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
 
 [tool.uv]
 required-version = ">=0.9"

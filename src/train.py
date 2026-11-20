@@ -68,7 +68,7 @@ def download_january() -> None:
     DATA_PATH.parent.mkdir(parents=True, exist_ok=True)
     tmp_path = DATA_PATH.with_suffix(".parquet.tmp")
     pd.read_parquet(DATA_URL, columns=COLUMNS).to_parquet(tmp_path)
-    tmp_path.replace(DATA_PATH)   # atomic rename
+    tmp_path.replace(DATA_PATH)  # atomic rename
 
 
 def clean_trips(df: pd.DataFrame) -> pd.DataFrame:
@@ -119,16 +119,21 @@ def load_tuned_params() -> tuple[dict, str]:
     try:
         run = ss.latest_run(TUNING_RUN_NAME)
     except LookupError:
-        print(f"Note: no finished '{TUNING_RUN_NAME}' run in MLflow - using the fallback BEST_PARAMS "
-              f"from src/train.py. Run `uv run nyc-taxi tune` to tune them.")
+        print(
+            f"Note: no finished '{TUNING_RUN_NAME}' run in MLflow - using the fallback BEST_PARAMS "
+            f"from src/train.py. Run `uv run nyc-taxi tune` to tune them."
+        )
         print("Params used:", BEST_PARAMS)
         return dict(BEST_PARAMS), "BEST_PARAMS fallback (src/train.py)"
 
-    params = {k.removeprefix("best_"): _parse_param(v)
-              for k, v in run.data.params.items() if k.startswith("best_")}
+    params = {
+        k.removeprefix("best_"): _parse_param(v) for k, v in run.data.params.items() if k.startswith("best_")
+    }
     if set(params) != set(BEST_PARAMS):
-        print(f"Note: run {run.info.run_id} ({TUNING_RUN_NAME}) has unexpected best params "
-              f"{sorted(params)} - using the fallback BEST_PARAMS from src/train.py.")
+        print(
+            f"Note: run {run.info.run_id} ({TUNING_RUN_NAME}) has unexpected best params "
+            f"{sorted(params)} - using the fallback BEST_PARAMS from src/train.py."
+        )
         print("Params used:", BEST_PARAMS)
         return dict(BEST_PARAMS), "BEST_PARAMS fallback (src/train.py)"
     source = f"{TUNING_RUN_NAME} run {run.info.run_id}"
@@ -153,9 +158,9 @@ def score_predictions(split: str, train_df: pd.DataFrame, eval_df: pd.DataFrame,
     return metrics
 
 
-def _period_params(periods: dict) -> dict:
+def _period_params(periods: dict) -> dict[str, str | int]:
     """Training and evaluation periods of both splits, as MLflow params."""
-    params = {}
+    params: dict[str, str | int] = {}
     for split, (train_df, eval_df) in periods.items():
         for role, df in (("train", train_df), ("eval", eval_df)):
             pickup = df["tpep_pickup_datetime"]
@@ -202,17 +207,29 @@ def train_baseline(full: pd.DataFrame, X: pd.DataFrame, zone_xy: pd.DataFrame) -
             logged_model, logged_index = model, fit_index
         del model
 
-    params = {**BASELINE_PARAMS, "sample_size": SAMPLE_SIZE,
-              "logged_model": "fit on the sample's Jan 1-20 trips",
-              "test_scored_with": "refit on the sample's Jan 1-25 trips"}
-    version = log_model_run(logged_model, params, metrics, X.columns, BASELINE_RUN_NAME,
-                            register_name=MODEL_NAME, zone_xy=zone_xy, X=X.loc[logged_index],
-                            training_period=period_of(full.loc[logged_index]))
+    params = {
+        **BASELINE_PARAMS,
+        "sample_size": SAMPLE_SIZE,
+        "logged_model": "fit on the sample's Jan 1-20 trips",
+        "test_scored_with": "refit on the sample's Jan 1-25 trips",
+    }
+    version = log_model_run(
+        logged_model,
+        params,
+        metrics,
+        X.columns,
+        BASELINE_RUN_NAME,
+        register_name=MODEL_NAME,
+        zone_xy=zone_xy,
+        X=X.loc[logged_index],
+        training_period=period_of(full.loc[logged_index]),
+    )
     return version
 
 
-def train_final(full: pd.DataFrame, X: pd.DataFrame, params: dict,
-                params_source: str = "") -> dict[str, float]:
+def train_final(
+    full: pd.DataFrame, X: pd.DataFrame, params: dict, params_source: str = ""
+) -> dict[str, float]:
     """rf-final-jan1-25: the tuned params on Jan 1-25, scored once on Jan 26-31.
 
     Logs params, dataset periods and test metrics only (no model artifact):

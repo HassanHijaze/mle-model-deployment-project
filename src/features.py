@@ -14,8 +14,16 @@ import pandas as pd
 ZONES_URL = "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zones.zip"
 
 FEATURES = [
-    "PULocationID", "DOLocationID", "hour", "day_of_week", "is_holiday",
-    "PU_lat", "PU_lon", "DO_lat", "DO_lon", "straight_dist",
+    "PULocationID",
+    "DOLocationID",
+    "hour",
+    "day_of_week",
+    "is_holiday",
+    "PU_lat",
+    "PU_lon",
+    "DO_lat",
+    "DO_lon",
+    "straight_dist",
 ]
 
 
@@ -41,10 +49,9 @@ def build_zone_xy(data_dir: Path) -> pd.DataFrame:
         raise FileNotFoundError(f"No .shp file found in {zone_dir} after download")
 
     gdf = gpd.read_file(shp_files[0]).dissolve(by="LocationID")
-    centroids = gdf.geometry.centroid     # feet (NYC map projection)
+    centroids = gdf.geometry.centroid  # feet (NYC map projection)
     latlon = centroids.to_crs(epsg=4326)  # latitude/longitude
-    return pd.DataFrame({"x": centroids.x, "y": centroids.y,
-                         "lat": latlon.y, "lon": latlon.x})
+    return pd.DataFrame({"x": centroids.x, "y": centroids.y, "lat": latlon.y, "lon": latlon.x})
 
 
 def build_features(df: pd.DataFrame, zone_xy: pd.DataFrame) -> pd.DataFrame:

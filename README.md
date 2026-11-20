@@ -73,9 +73,18 @@ Zone IDs: 1–265. `pickup_datetime`: NYC local time, no timezone.
 
 ## Tests
 
-```bash
-uv run pytest
-```
+| What | Command | Locally | CI job |
+|---|---|---|---|
+| Format and lint | `uv run ruff format --check .` · `uv run ruff check .` | yes | `lint` |
+| Types (src/, app/) | `uv run mypy` | yes | `lint` |
+| Dependency vulnerabilities | `uv export --frozen --all-groups --no-emit-project --format requirements-txt -o req.txt` then `uv run pip-audit -r req.txt --require-hashes --disable-pip` | yes | `security` |
+| Unit and API tests (fake models, no MLflow) | `uv run pytest` | yes | `tests` |
+| Model and integration tests (real champion) | `uv run pytest` with MLflow and a champion | yes | skipped (no MLflow) |
+| Docker images build | `docker build .` | yes | `docker` |
+| End-to-end: compose stack, promote, upgrade, reject a broken version | `uv run pytest -m e2e tests/e2e` | yes (needs Docker) | `e2e` |
+
+The end-to-end test starts its own throwaway stack (compose project `nyc-taxi-e2e`, other ports), registers tiny
+synthetic models and always removes its containers and volumes; it never touches the development registry.
 
 ## Design Notes
 

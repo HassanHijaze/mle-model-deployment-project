@@ -58,7 +58,7 @@ class Bundle:
     schema: dict | None
     version: str
     run_id: str | None = None
-    params: dict = field(default_factory=dict)       # run params (training period, versions)
+    params: dict = field(default_factory=dict)  # run params (training period, versions)
     warnings: tuple[str, ...] = ()
 
 
@@ -85,9 +85,12 @@ def library_versions() -> dict[str, str]:
 
 def reference_frame() -> pd.DataFrame:
     """REFERENCE_TRIPS as the raw columns build_features expects."""
-    return pd.DataFrame([{"PULocationID": pu, "DOLocationID": do,
-                          "tpep_pickup_datetime": pd.Timestamp(when)}
-                         for pu, do, when in REFERENCE_TRIPS])
+    return pd.DataFrame(
+        [
+            {"PULocationID": pu, "DOLocationID": do, "tpep_pickup_datetime": pd.Timestamp(when)}
+            for pu, do, when in REFERENCE_TRIPS
+        ]
+    )
 
 
 def log_bundle_metadata(X: pd.DataFrame, training_period: tuple[str, str] | None = None) -> None:
@@ -150,18 +153,23 @@ def fetch_bundle(model_name: str, *, alias: str | None = None, version: str | in
     which = f"alias '{alias}'" if alias else f"version {version}"
     try:
         client = _client()
-        mv = (client.get_model_version_by_alias(model_name, alias) if alias
-              else client.get_model_version(model_name, str(version)))
+        mv = (
+            client.get_model_version_by_alias(model_name, alias)
+            if alias
+            else client.get_model_version(model_name, str(version))
+        )
     except Exception as exc:
-        raise BundleLoadError(f"MLflow registry unreachable or {model_name} {which} not found: "
-                              f"{type(exc).__name__}: {exc}") from exc
+        raise BundleLoadError(
+            f"MLflow registry unreachable or {model_name} {which} not found: {type(exc).__name__}: {exc}"
+        ) from exc
 
     version = str(mv.version)
     try:
         model = _load_model(f"models:/{model_name}/{version}")
     except Exception as exc:
-        raise BundleLoadError(f"{model_name} version {version} could not be loaded: "
-                              f"{type(exc).__name__}: {exc}") from exc
+        raise BundleLoadError(
+            f"{model_name} version {version} could not be loaded: {type(exc).__name__}: {exc}"
+        ) from exc
 
     warnings = []
     zone_xy = None
@@ -174,8 +182,10 @@ def fetch_bundle(model_name: str, *, alias: str | None = None, version: str | in
     try:
         schema = json.loads(Path(_download(mv.run_id, FEATURE_SCHEMA_FILE)).read_text(encoding="utf-8"))
     except Exception:
-        warnings.append(f"{FEATURE_SCHEMA_FILE} not logged with this model (older model): "
-                        "checked against the model's own feature names instead")
+        warnings.append(
+            f"{FEATURE_SCHEMA_FILE} not logged with this model (older model): "
+            "checked against the model's own feature names instead"
+        )
 
     params = {}
     try:
@@ -183,8 +193,15 @@ def fetch_bundle(model_name: str, *, alias: str | None = None, version: str | in
     except Exception as exc:
         warnings.append(f"run params unavailable: {type(exc).__name__}: {exc}")
 
-    return Bundle(model=model, zone_xy=zone_xy, schema=schema, version=version, run_id=mv.run_id,
-                  params=params, warnings=tuple(warnings))
+    return Bundle(
+        model=model,
+        zone_xy=zone_xy,
+        schema=schema,
+        version=version,
+        run_id=mv.run_id,
+        params=params,
+        warnings=tuple(warnings),
+    )
 
 
 # ---------------------------------------------------------------------------------
@@ -240,19 +257,24 @@ def validate_bundle(bundle: Bundle) -> list[str]:
             problems.append(f"test prediction failed: {type(exc).__name__}: {exc}")
         else:
             if pred.shape != (len(REFERENCE_TRIPS),):
-                problems.append(f"test prediction returned shape {pred.shape}, "
-                                f"expected ({len(REFERENCE_TRIPS)},)")
+                problems.append(
+                    f"test prediction returned shape {pred.shape}, expected ({len(REFERENCE_TRIPS)},)"
+                )
             elif not np.all(np.isfinite(pred)):
                 problems.append(f"test predictions are not all finite: {pred.tolist()}")
             elif np.any(pred < MIN_MINUTES) or np.any(pred > MAX_MINUTES):
-                problems.append(f"test predictions outside {MIN_MINUTES:g}-{MAX_MINUTES:g} min: "
-                                f"{np.round(pred, 2).tolist()}")
+                problems.append(
+                    f"test predictions outside {MIN_MINUTES:g}-{MAX_MINUTES:g} min: "
+                    f"{np.round(pred, 2).tolist()}"
+                )
     return problems
 
 
 def version_differences(params: dict) -> list[str]:
     """Libraries whose installed version differs from the one logged at training time."""
     installed = library_versions()
-    return [f"{dist}: trained with {params[f'lib_{key}']}, installed {installed[key]}"
-            for key, dist in LIBRARIES.items()
-            if f"lib_{key}" in params and params[f"lib_{key}"] != installed[key]]
+    return [
+        f"{dist}: trained with {params[f'lib_{key}']}, installed {installed[key]}"
+        for key, dist in LIBRARIES.items()
+        if f"lib_{key}" in params and params[f"lib_{key}"] != installed[key]
+    ]

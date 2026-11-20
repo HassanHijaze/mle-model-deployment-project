@@ -4,8 +4,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from src.baselines import (NAIVE_BASELINES, missing_runs_message, overall_median_predict,
-                           zone_pair_median_predict)
+from src.baselines import (
+    NAIVE_BASELINES,
+    missing_runs_message,
+    overall_median_predict,
+    zone_pair_median_predict,
+)
 from src.train import evaluation_periods, score_predictions
 
 
@@ -16,10 +20,15 @@ def trips(rows, start=0):
     return df
 
 
-TRAIN = trips([
-    (1, 2, 10.0), (1, 2, 20.0), (1, 2, 12.0),  # pair (1, 2): median 12
-    (3, 4, 30.0), (3, 4, 40.0),                # pair (3, 4): median 35
-])  # overall training median: 20
+TRAIN = trips(
+    [
+        (1, 2, 10.0),
+        (1, 2, 20.0),
+        (1, 2, 12.0),  # pair (1, 2): median 12
+        (3, 4, 30.0),
+        (3, 4, 40.0),  # pair (3, 4): median 35
+    ]
+)  # overall training median: 20
 
 
 def test_overall_median_uses_training_durations_only():
@@ -40,8 +49,9 @@ def test_zone_pair_median_unseen_pair_falls_back_to_overall_training_median():
 def test_zone_pair_median_ignores_evaluation_durations():
     eval_a = trips([(1, 2, 1.0), (3, 4, 1.0)], start=100)
     eval_b = trips([(1, 2, 500.0), (3, 4, 500.0)], start=100)
-    np.testing.assert_array_equal(zone_pair_median_predict(TRAIN, eval_a),
-                                  zone_pair_median_predict(TRAIN, eval_b))
+    np.testing.assert_array_equal(
+        zone_pair_median_predict(TRAIN, eval_a), zone_pair_median_predict(TRAIN, eval_b)
+    )
 
 
 @pytest.mark.parametrize("predict", [overall_median_predict, zone_pair_median_predict])
@@ -60,8 +70,9 @@ def test_every_naive_baseline_has_a_function_and_a_description():
 
 def test_evaluation_periods_learn_from_training_days_only():
     days = pd.date_range("2025-01-01 08:00", "2025-01-31 08:00", freq="D")
-    full = pd.DataFrame({"tpep_pickup_datetime": days, "PULocationID": 1, "DOLocationID": 2,
-                         "duration": 10.0})
+    full = pd.DataFrame(
+        {"tpep_pickup_datetime": days, "PULocationID": 1, "DOLocationID": 2, "duration": 10.0}
+    )
     periods = evaluation_periods(full)
 
     val_train, val_eval = periods["val"]

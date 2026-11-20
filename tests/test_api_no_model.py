@@ -24,13 +24,16 @@ def client_no_model(monkeypatch):
         yield c
 
 
-@pytest.mark.parametrize("bad_trip", [
-    {**VALID_TRIP, "PULocationID": 0},
-    {**VALID_TRIP, "DOLocationID": 300},
-    {k: v for k, v in VALID_TRIP.items() if k != "pickup_datetime"},
-    {**VALID_TRIP, "pickup_datetime": "2025-01-27T08:30:00Z"},
-    {**VALID_TRIP, "pickup_datetime": "2025-01-27T08:30:00+00:00"},
-])
+@pytest.mark.parametrize(
+    "bad_trip",
+    [
+        {**VALID_TRIP, "PULocationID": 0},
+        {**VALID_TRIP, "DOLocationID": 300},
+        {k: v for k, v in VALID_TRIP.items() if k != "pickup_datetime"},
+        {**VALID_TRIP, "pickup_datetime": "2025-01-27T08:30:00Z"},
+        {**VALID_TRIP, "pickup_datetime": "2025-01-27T08:30:00+00:00"},
+    ],
+)
 def test_predict_rejects_invalid_input(client_no_model, bad_trip):
     assert client_no_model.post("/predict", json=bad_trip).status_code == 422
 

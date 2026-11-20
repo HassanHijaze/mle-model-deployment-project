@@ -38,10 +38,16 @@ def test_live_and_ready(client):
     assert client.get("/ready").json() == {"status": "ready", "model_version": "7"}
 
 
-@pytest.mark.parametrize("method, path, body", [
-    ("get", "/live", None), ("get", "/ready", None), ("get", "/health", None),
-    ("post", "/predict", TRIP), ("get", "/no-such-page", None),
-])
+@pytest.mark.parametrize(
+    "method, path, body",
+    [
+        ("get", "/live", None),
+        ("get", "/ready", None),
+        ("get", "/health", None),
+        ("post", "/predict", TRIP),
+        ("get", "/no-such-page", None),
+    ],
+)
 def test_every_response_gets_a_new_request_id(client, method, path, body):
     r = getattr(client, method)(path, **({"json": body} if body else {}))
     rid = r.headers["X-Request-ID"]
@@ -69,7 +75,9 @@ def test_error_format_not_found(client):
 
 
 def test_error_format_validation(client):
-    body = assert_error_format(client.post("/predict", json={**TRIP, "PULocationID": 0}), 422, "invalid_request")
+    body = assert_error_format(
+        client.post("/predict", json={**TRIP, "PULocationID": 0}), 422, "invalid_request"
+    )
     assert body["details"][0]["loc"] == ["body", "PULocationID"]
 
 
@@ -104,7 +112,7 @@ def test_request_log_is_json_with_request_id_and_model_version(client):
     finally:
         logger.removeHandler(handler)
     lines = [json.loads(line) for line in stream.getvalue().splitlines()]
-    finished = [l for l in lines if l["message"] == "request finished"]
+    finished = [entry for entry in lines if entry["message"] == "request finished"]
     assert finished, lines
     line = finished[-1]
     assert line["request_id"] == "log-test-1" and line["model_version"] == "7"

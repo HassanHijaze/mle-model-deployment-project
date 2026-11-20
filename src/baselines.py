@@ -50,11 +50,12 @@ def zone_pair_median_predict(train_df: pd.DataFrame, eval_df: pd.DataFrame) -> n
 
 # MLflow run name -> (prediction function, description logged as a param)
 NAIVE_BASELINES = {
-    OVERALL_MEDIAN_RUN: (overall_median_predict,
-                         "median duration of the training trips"),
-    ZONE_PAIR_MEDIAN_RUN: (zone_pair_median_predict,
-                           "median duration per pickup/drop-off zone pair of the training trips; "
-                           "unseen pairs get the overall training median"),
+    OVERALL_MEDIAN_RUN: (overall_median_predict, "median duration of the training trips"),
+    ZONE_PAIR_MEDIAN_RUN: (
+        zone_pair_median_predict,
+        "median duration per pickup/drop-off zone pair of the training trips; "
+        "unseen pairs get the overall training median",
+    ),
 }
 
 

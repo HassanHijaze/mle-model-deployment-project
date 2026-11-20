@@ -1,5 +1,5 @@
 # API image: FastAPI app + feature code, dependencies installed with uv
-FROM python:3.13-slim
+FROM python:3.13.18-slim
 
 # Pinned uv version (same as the project requires), so builds are reproducible
 COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /usr/local/bin/uv

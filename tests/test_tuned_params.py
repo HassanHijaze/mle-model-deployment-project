@@ -10,8 +10,15 @@ def fake_run(params):
 
 
 def test_tuned_params_come_from_the_latest_tuning_run(monkeypatch, capsys):
-    run = fake_run({"best_n_estimators": "150", "best_max_depth": "30", "best_min_samples_leaf": "4",
-                    "best_max_features": "1.0", "sample_size": "500000"})
+    run = fake_run(
+        {
+            "best_n_estimators": "150",
+            "best_max_depth": "30",
+            "best_min_samples_leaf": "4",
+            "best_max_features": "1.0",
+            "sample_size": "500000",
+        }
+    )
     monkeypatch.setattr(train.ss, "latest_run", lambda name: run)
     params, source = train.load_tuned_params()
     assert params == {"n_estimators": 150, "max_depth": 30, "min_samples_leaf": 4, "max_features": 1.0}

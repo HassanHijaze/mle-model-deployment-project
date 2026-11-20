@@ -25,7 +25,7 @@ import secrets
 import threading
 import time
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 import mlflow
@@ -50,7 +50,7 @@ MODEL_VERSION_HEADER = "X-Model-Version"
 
 mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5002"))
 
-_state_lock = threading.Lock()   # guards _bundle and _last_reload (swaps are a single assignment)
+_state_lock = threading.Lock()  # guards _bundle and _last_reload (swaps are a single assignment)
 _reload_lock = threading.Lock()  # only one reload at a time (a model can be several GB)
 _bundle: bundle_lib.Bundle | None = None
 _last_reload: dict = {"at": None, "source": None, "ok": None, "version": None, "error": None}
@@ -106,8 +106,13 @@ def current_bundle() -> bundle_lib.Bundle | None:
 
 def _record(source: str, ok: bool, version: str | None, error: str | None) -> None:
     with _state_lock:
-        _last_reload.update(at=datetime.now(timezone.utc).isoformat(timespec="seconds"),
-                            source=source, ok=ok, version=version, error=error)
+        _last_reload.update(
+            at=datetime.now(UTC).isoformat(timespec="seconds"),
+            source=source,
+            ok=ok,
+            version=version,
+            error=error,
+        )
 
 
 def _swap(new: bundle_lib.Bundle | None) -> None:
@@ -130,8 +135,10 @@ async def lifespan(app: FastAPI):
         _record("startup", False, None, str(exc))
         _swap(None)
     except InvalidBundleError as exc:
-        logger.error("Champion bundle failed validation at startup",
-                     extra={"event": "startup", "model_version": exc.version, "reason": str(exc)})
+        logger.error(
+            "Champion bundle failed validation at startup",
+            extra={"event": "startup", "model_version": exc.version, "reason": str(exc)},
+        )
         _record("startup", False, exc.version, f"version {exc.version} failed validation: {exc}")
         _swap(None)
     else:
@@ -167,14 +174,20 @@ async def request_context(request: Request, call_next):
             response = await call_next(request)
         except Exception:
             logger.exception("Unhandled error", extra={"event": "unhandled_error"})
-            response = JSONResponse(status_code=500,
-                                    content=error_body("internal_error", "Internal server error.", request_id))
+            response = JSONResponse(
+                status_code=500, content=error_body("internal_error", "Internal server error.", request_id)
+            )
         response.headers[REQUEST_ID_HEADER] = request_id
-        logger.info("request finished", extra={
-            "method": request.method, "path": request.url.path, "status_code": response.status_code,
-            "duration_ms": round((time.perf_counter() - start) * 1000, 2),
-            "model_version": getattr(request.state, "model_version", None),
-        })
+        logger.info(
+            "request finished",
+            extra={
+                "method": request.method,
+                "path": request.url.path,
+                "status_code": response.status_code,
+                "duration_ms": round((time.perf_counter() - start) * 1000, 2),
+                "model_version": getattr(request.state, "model_version", None),
+            },
+        )
         return response
     finally:
         request_id_var.reset(token)
@@ -183,23 +196,33 @@ async def request_context(request: Request, call_next):
 @app.exception_handler(ApiError)
 async def api_error_handler(request: Request, exc: ApiError):
     logger.warning(exc.message, extra={"event": exc.code})
-    return JSONResponse(status_code=exc.status_code,
-                        content=error_body(exc.code, exc.message, _request_id(request), **exc.extra))
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_body(exc.code, exc.message, _request_id(request), **exc.extra),
+    )
 
 
 @app.exception_handler(StarletteHTTPException)
 async def http_error_handler(request: Request, exc: StarletteHTTPException):
     code = HTTP_ERROR_CODES.get(exc.status_code, f"http_{exc.status_code}")
-    return JSONResponse(status_code=exc.status_code, headers=getattr(exc, "headers", None),
-                        content=error_body(code, str(exc.detail), _request_id(request)))
+    return JSONResponse(
+        status_code=exc.status_code,
+        headers=getattr(exc, "headers", None),
+        content=error_body(code, str(exc.detail), _request_id(request)),
+    )
 
 
 @app.exception_handler(RequestValidationError)
 async def validation_error_handler(request: Request, exc: RequestValidationError):
-    details = [{"loc": list(e.get("loc", ())), "message": e.get("msg"), "type": e.get("type")}
-               for e in exc.errors()]
-    return JSONResponse(status_code=422, content=error_body(
-        "invalid_request", "The request is invalid; see details.", _request_id(request), details=details))
+    details = [
+        {"loc": list(e.get("loc", ())), "message": e.get("msg"), "type": e.get("type")} for e in exc.errors()
+    ]
+    return JSONResponse(
+        status_code=422,
+        content=error_body(
+            "invalid_request", "The request is invalid; see details.", _request_id(request), details=details
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------------
@@ -234,13 +257,19 @@ class Prediction(BaseModel):
 def predict(trip: Trip, request: Request, response: Response) -> Prediction:
     current = current_bundle()  # one reference: a reload swapping meanwhile does not affect this request
     if current is None:
-        raise ApiError(503, "model_not_loaded", "No model loaded. Register a champion model and call /reload.")
+        raise ApiError(
+            503, "model_not_loaded", "No model loaded. Register a champion model and call /reload."
+        )
 
-    df = pd.DataFrame([{
-        "PULocationID": trip.PULocationID,
-        "DOLocationID": trip.DOLocationID,
-        "tpep_pickup_datetime": trip.pickup_datetime,
-    }])
+    df = pd.DataFrame(
+        [
+            {
+                "PULocationID": trip.PULocationID,
+                "DOLocationID": trip.DOLocationID,
+                "tpep_pickup_datetime": trip.pickup_datetime,
+            }
+        ]
+    )
     minutes = float(current.model.predict(build_features(df, current.zone_xy))[0])
 
     request.state.model_version = current.version
@@ -251,7 +280,9 @@ def predict(trip: Trip, request: Request, response: Response) -> Prediction:
 def require_admin(token: str | None) -> None:
     expected = os.getenv(ADMIN_TOKEN_ENV)
     if not expected:
-        raise ApiError(503, "reload_disabled", f"{ADMIN_TOKEN_ENV} is not set on the server, so /reload is disabled.")
+        raise ApiError(
+            503, "reload_disabled", f"{ADMIN_TOKEN_ENV} is not set on the server, so /reload is disabled."
+        )
     if not token or not secrets.compare_digest(token.encode(), expected.encode()):
         raise ApiError(401, "unauthorized", "Missing or wrong X-Admin-Token header.")
 
@@ -274,22 +305,31 @@ def reload(x_admin_token: str | None = Header(default=None)) -> dict:
             new = load_and_validate()  # slow part: requests keep using the old bundle meanwhile
         except bundle_lib.BundleLoadError as exc:
             _record("reload", False, None, str(exc))
-            raise ApiError(502, "reload_failed", f"Could not load the champion bundle: {exc}",
-                           serving_version=serving) from exc
+            raise ApiError(
+                502, "reload_failed", f"Could not load the champion bundle: {exc}", serving_version=serving
+            ) from exc
         except InvalidBundleError as exc:
             _record("reload", False, exc.version, f"version {exc.version} failed validation: {exc}")
-            raise ApiError(422, "bundle_invalid",
-                           f"Version {exc.version} failed validation; still serving version {serving}.",
-                           rejected_version=exc.version, problems=exc.problems, serving_version=serving) from exc
+            raise ApiError(
+                422,
+                "bundle_invalid",
+                f"Version {exc.version} failed validation; still serving version {serving}.",
+                rejected_version=exc.version,
+                problems=exc.problems,
+                serving_version=serving,
+            ) from exc
         except Exception as exc:  # e.g. a corrupted model that crashes during validation
             _record("reload", False, None, f"{type(exc).__name__}: {exc}")
-            raise ApiError(500, "reload_failed", f"Reload failed: {type(exc).__name__}: {exc}",
-                           serving_version=serving) from exc
+            raise ApiError(
+                500, "reload_failed", f"Reload failed: {type(exc).__name__}: {exc}", serving_version=serving
+            ) from exc
 
         _swap(new)
         _record("reload", True, new.version, None)
-        logger.info("Model reloaded", extra={"event": "reload", "model_version": new.version,
-                                             "previous_version": serving})
+        logger.info(
+            "Model reloaded",
+            extra={"event": "reload", "model_version": new.version, "previous_version": serving},
+        )
         return {
             "status": "reloaded",
             "previous_version": serving,

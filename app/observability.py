@@ -17,21 +17,29 @@ import re
 import sys
 import uuid
 from contextvars import ContextVar
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 REQUEST_ID_HEADER = "X-Request-ID"
 _VALID_REQUEST_ID = re.compile(r"^[A-Za-z0-9._:\-]{1,128}$")
 request_id_var: ContextVar[str | None] = ContextVar("request_id", default=None)
 
 # Extra attributes copied into the JSON line when a log call passes them (extra={...})
-EXTRA_FIELDS = ("model_version", "previous_version", "method", "path", "status_code",
-                "duration_ms", "event", "reason")
+EXTRA_FIELDS = (
+    "model_version",
+    "previous_version",
+    "method",
+    "path",
+    "status_code",
+    "duration_ms",
+    "event",
+    "reason",
+)
 
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
         payload = {
-            "timestamp": datetime.fromtimestamp(record.created, tz=timezone.utc).isoformat(timespec="milliseconds"),
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(timespec="milliseconds"),
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),

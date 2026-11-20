@@ -172,3 +172,5 @@ images/
 # Local MLflow databases and model files
 mlflow.db
 *.skops
+# Artifacts of the throwaway end-to-end test stack
+.e2e-mlartifacts/

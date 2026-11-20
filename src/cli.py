@@ -58,12 +58,14 @@ def run_verify(version: str) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="nyc-taxi", description=__doc__,
-        formatter_class=argparse.RawDescriptionHelpFormatter)
+        prog="nyc-taxi", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
     sub.add_parser("data", help="download January and February 2025 and build the zone table")
     sub.add_parser("tune", help="Optuna search on the 500k sample, logged as MLflow run optuna-tuning")
-    sub.add_parser("train", help="baselines (median, zone-pair median, RF) + tuned 200-tree test score, logged to MLflow")
+    sub.add_parser(
+        "train", help="baselines (median, zone-pair median, RF) + tuned 200-tree test score, logged to MLflow"
+    )
     sub.add_parser("select", help="choose, evaluate on February and register the serving model (no alias)")
     sub.add_parser("all", help="data -> tune -> train -> select, stopping on the first error")
     v = sub.add_parser("verify", help="check one registered model version before promoting it")
@@ -85,11 +87,13 @@ def check_mlflow() -> str:
     try:
         with urllib.request.urlopen(f"{TRACKING_URI.rstrip('/')}/health", timeout=5) as response:
             if response.status != 200:
-                raise PipelineError(f"MLflow server at {TRACKING_URI} answered HTTP {response.status}; "
-                                    f"{MLFLOW_START_HINT}")
+                raise PipelineError(
+                    f"MLflow server at {TRACKING_URI} answered HTTP {response.status}; {MLFLOW_START_HINT}"
+                )
     except (urllib.error.URLError, OSError) as exc:
-        raise PipelineError(f"MLflow server not reachable at {TRACKING_URI} ({exc}); "
-                            f"{MLFLOW_START_HINT}") from None
+        raise PipelineError(
+            f"MLflow server not reachable at {TRACKING_URI} ({exc}); {MLFLOW_START_HINT}"
+        ) from None
     return TRACKING_URI
 
 
@@ -129,7 +133,11 @@ def run_select() -> dict:
 
 
 STEPS: dict[str, Callable[[], dict]] = {
-    "data": run_data, "tune": run_tune, "train": run_train, "select": run_select}  # "all" order
+    "data": run_data,
+    "tune": run_tune,
+    "train": run_train,
+    "select": run_select,
+}  # "all" order
 
 
 def _elapsed(seconds: float) -> str:
