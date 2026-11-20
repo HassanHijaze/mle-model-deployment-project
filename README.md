@@ -1,6 +1,6 @@
-# NYC Taxi Trip Duration Prediction
+# NYC Taxi Trip Duration Prediction | End-to-End ML Engineering
 
-[![CI](https://github.com/HassanHijaze/production-ml-microservice/actions/workflows/ci.yml/badge.svg)](https://github.com/HassanHijaze/production-ml-microservice/actions/workflows/ci.yml)
+[![CI](https://github.com/HassanHijaze/nyc-taxi-prediction-service/actions/workflows/ci.yml/badge.svg)](https://github.com/HassanHijaze/nyc-taxi-prediction-service/actions/workflows/ci.yml)
 
 **From NYC TLC trip records to a monitored prediction API.** This project predicts yellow-taxi trip duration using only information available at pickup: origin zone, destination zone, and pickup time. It includes reproducible training, validation-based model selection, MLflow registration, safe FastAPI model reloads, CI, and Prometheus metrics.
 
