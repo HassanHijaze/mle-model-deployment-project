@@ -40,12 +40,12 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from app import metrics
 from app.observability import REQUEST_ID_HEADER, error_body, request_id_var, resolve_request_id, setup_logging
 from src import bundle as bundle_lib
+from src.experiment import MODEL_NAME
 from src.features import build_features
 
 setup_logging()
 logger = logging.getLogger("app")
 
-MODEL_NAME = "nyc-taxi-duration-rf"
 MODEL_ALIAS = "champion"
 ADMIN_TOKEN_ENV = "ADMIN_TOKEN"
 MODEL_VERSION_HEADER = "X-Model-Version"
@@ -53,7 +53,7 @@ MODEL_VERSION_HEADER = "X-Model-Version"
 mlflow.set_tracking_uri(os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5002"))
 
 _state_lock = threading.Lock()  # guards _bundle and _last_reload (swaps are a single assignment)
-_reload_lock = threading.Lock()  # only one reload at a time (a model can be several GB)
+_reload_lock = threading.Lock()  # only one reload at a time (loading and validating a model takes a while)
 _bundle: bundle_lib.Bundle | None = None
 _last_reload: dict = {"at": None, "source": None, "ok": None, "version": None, "error": None}
 

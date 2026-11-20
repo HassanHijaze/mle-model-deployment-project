@@ -156,8 +156,8 @@ def run_step(name: str) -> dict:
 
 def print_next_steps(results: dict) -> None:
     """Registered versions, the (unchanged) champion and how to promote a version."""
+    from src.experiment import MODEL_NAME
     from src.tracking import alias_version
-    from src.train import MODEL_NAME
 
     if "registered_version" in results:
         print(

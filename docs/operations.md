@@ -14,6 +14,7 @@ Candidates: the RF baseline (`nyc-taxi train`) and every Optuna trial (`nyc-taxi
 1. Best: the lowest validation RMSE.
 2. Tied: every candidate within 1% of the best validation RMSE.
 3. Winner: the smallest model (`model_mb`) among the tied candidates.
+4. Equal sizes: the lower validation RMSE wins.
 
 ## Promote a new version
 
@@ -33,6 +34,7 @@ Candidates: the RF baseline (`nyc-taxi train`) and every Optuna trial (`nyc-taxi
 4. **Reload the API.**
 
    ```bash
+   export $(grep ADMIN_TOKEN .env)    # the token for /reload, from .env
    curl -X POST http://localhost:8000/reload -H "X-Admin-Token: $ADMIN_TOKEN"
    ```
 
@@ -50,7 +52,12 @@ Candidates: the RF baseline (`nyc-taxi train`) and every Optuna trial (`nyc-taxi
 ## Roll back
 
 1. In the MLflow UI, move the `champion` alias back to the previous version.
-2. Reload: `curl -X POST http://localhost:8000/reload -H "X-Admin-Token: $ADMIN_TOKEN"`.
+2. Reload:
+
+   ```bash
+   export $(grep ADMIN_TOKEN .env)
+   curl -X POST http://localhost:8000/reload -H "X-Admin-Token: $ADMIN_TOKEN"
+   ```
 3. Confirm with `curl http://localhost:8000/ready`.
 
 ## Probes and logs

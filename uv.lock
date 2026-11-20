@@ -2096,7 +2096,6 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "fastapi" },
-    { name = "geopandas" },
     { name = "holidays" },
     { name = "mlflow" },
     { name = "numpy" },
@@ -2129,7 +2128,6 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "fastapi", specifier = ">=0.141.1" },
-    { name = "geopandas", specifier = ">=1.2.0" },
     { name = "holidays", specifier = ">=0.108" },
     { name = "mlflow", specifier = ">=3.16.1" },
     { name = "numpy", specifier = ">=2.5.3" },

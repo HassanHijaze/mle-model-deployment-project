@@ -17,6 +17,8 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from src.experiment import EXPERIMENT, MISSING_RUN_HINT
+
 OVERALL_MEDIAN_RUN = "baseline-overall-median"
 ZONE_PAIR_MEDIAN_RUN = "baseline-zone-pair-median"
 RF_BASELINE_RUN = "rf-baseline"
@@ -27,7 +29,6 @@ BASELINE_RUNS = {
     "Zone-pair median": ZONE_PAIR_MEDIAN_RUN,
     "RF baseline": RF_BASELINE_RUN,
 }
-MISSING_RUN_HINT = "Run `uv run nyc-taxi all` first (MLflow server must be running)."
 
 ZONE_PAIR = ["PULocationID", "DOLocationID"]
 
@@ -59,7 +60,7 @@ NAIVE_BASELINES = {
 }
 
 
-def read_baseline_runs(experiment: str = "nyc-taxi-duration") -> tuple[dict, list[str]]:
+def read_baseline_runs(experiment: str = EXPERIMENT) -> tuple[dict, list[str]]:
     """Latest finished run of each baseline: ({label: mlflow Run}, [missing run names])."""
     from src.tracking import latest_run
 
@@ -70,11 +71,6 @@ def read_baseline_runs(experiment: str = "nyc-taxi-duration") -> tuple[dict, lis
         except LookupError:
             missing.append(run_name)
     return runs, missing
-
-
-def baseline_metrics_table(runs: dict) -> pd.DataFrame:
-    """One row per baseline (label), one column per logged metric."""
-    return pd.DataFrame({label: run.data.metrics for label, run in runs.items()}).T
 
 
 def missing_runs_message(missing: list[str]) -> str:

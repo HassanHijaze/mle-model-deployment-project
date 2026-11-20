@@ -13,13 +13,11 @@ import numpy as np
 import pandas as pd
 
 RANDOM_STATE = 42  # every Random Forest uses this seed: same params + same data = same model
-SKOPS_TRUSTED_TYPES = ["sklearn.tree._tree.Tree"]  # same skops settings as src.experiment
 
 AIRPORT_ZONES = (1, 132, 138)  # Newark (EWR), JFK, LaGuardia
 SHORT_TRIP_MAX_MIN = 5.0  # actual duration < 5 min
 LONG_TRIP_MIN_MIN = 30.0  # actual duration > 30 min
 UNCOMMON_PAIR_MAX_TRIPS = 10  # zone pair seen fewer than 10 times in the training period
-SEGMENTS = ("short", "long", "airport", "uncommon_pair")  # keys of segment_masks()
 
 
 def regression_metrics(y_true, y_pred, prefix: str = "") -> dict[str, float]:
@@ -66,11 +64,6 @@ def segment_metrics(eval_df: pd.DataFrame, y_pred, masks: dict[str, np.ndarray])
         else:
             out.update({f"{name}_rmse": float("nan"), f"{name}_mae": float("nan")})
     return out
-
-
-def segment_sizes(masks: dict[str, np.ndarray]) -> pd.Series:
-    """Number of trips in each segment."""
-    return pd.Series({name: int(mask.sum()) for name, mask in masks.items()}, name="trips")
 
 
 def score_predictions(split: str, train_df: pd.DataFrame, eval_df: pd.DataFrame, pred) -> dict[str, float]:

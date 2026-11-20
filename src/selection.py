@@ -30,6 +30,7 @@ from src.baselines import (
     RF_BASELINE_RUN,
     ZONE_PAIR_MEDIAN_RUN,
 )
+from src.experiment import EXPERIMENT
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT_DIR = ROOT / "artifacts" / "selection"
@@ -111,7 +112,7 @@ def _candidate_row(
 
 
 def collect_candidates(
-    experiment: str = "nyc-taxi-duration",
+    experiment: str = EXPERIMENT,
 ) -> pd.DataFrame:
     """Collect RF baseline and Optuna candidates from MLflow."""
 
@@ -592,14 +593,13 @@ def run_selection(
     from src.baselines import read_baseline_runs
     from src.bundle import period_of
     from src.experiment import (
-        EXPERIMENT,
+        MODEL_NAME,
         TRACKING_URI,
         log_model_artifacts,
     )
     from src.features import build_features, build_zone_xy
     from src.tracking import alias_version
     from src.train import (
-        MODEL_NAME,
         load_splits,
         period_params,
     )
@@ -623,6 +623,16 @@ def run_selection(
 
     winner = table.iloc[0]
     params = candidate_params(winner)
+
+    # The RF baseline is scored on test next to the winner: fail now, before any refit, if its
+    # latest run cannot be used (e.g. an older run without val_rmse or model_mb).
+    rf_rows = table.loc[table["candidate"] == RF_BASELINE_RUN]
+    if rf_rows.empty:
+        raise LookupError(
+            f"The latest '{RF_BASELINE_RUN}' run has no val_rmse or model_mb, so it cannot be "
+            "compared on test. Run `uv run nyc-taxi train` again, then `uv run nyc-taxi select`."
+        )
+    rf_row = rf_rows.iloc[0]
 
     print(
         f"{int(table['tied'].sum())} of "
@@ -721,9 +731,7 @@ def run_selection(
             }
         )
 
-    # Random Forest baseline
-    rf_row = table.loc[table["candidate"] == RF_BASELINE_RUN].iloc[0]
-
+    # Random Forest baseline (rf_row was checked in step 1)
     if winner["candidate"] == RF_BASELINE_RUN:
         rf_model = model
     else:

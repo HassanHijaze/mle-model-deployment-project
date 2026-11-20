@@ -21,8 +21,7 @@ from src.bundle import (
     validate_bundle,
     version_differences,
 )
-
-MODEL_NAME = "nyc-taxi-duration-rf"
+from src.experiment import MODEL_NAME
 
 
 def verify_version(version: str | int, model_name: str = MODEL_NAME) -> int:

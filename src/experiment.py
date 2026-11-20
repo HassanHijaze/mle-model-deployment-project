@@ -13,6 +13,8 @@ import mlflow.sklearn
 
 TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5002")
 EXPERIMENT = "nyc-taxi-duration"
+MODEL_NAME = "nyc-taxi-duration-rf"  # registered model; the API serves its "champion" version
+MISSING_RUN_HINT = "Run `uv run nyc-taxi all` first (MLflow server must be running)."
 ZONE_FILE = "zone_xy.csv"  # zone table logged with every model, loaded by the API
 
 

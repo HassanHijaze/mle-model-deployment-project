@@ -1,4 +1,4 @@
-"""Small MLflow helpers: find runs, read their files, log dataset info, read aliases."""
+"""Small MLflow helpers: find runs, read their files, read aliases."""
 
 from __future__ import annotations
 
@@ -6,8 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 
-EXPERIMENT = "nyc-taxi-duration"
-MISSING_RUN_HINT = "Run `uv run nyc-taxi all` first (MLflow server must be running)."
+from src.experiment import EXPERIMENT, MISSING_RUN_HINT
 
 
 def latest_run(run_name: str, experiment: str = EXPERIMENT):
@@ -42,22 +41,6 @@ def download_run_file(run_id: str, name: str) -> Path:
     import mlflow
 
     return Path(mlflow.artifacts.download_artifacts(run_id=run_id, artifact_path=name))
-
-
-def log_datasets(datasets: dict[str, pd.DataFrame], source: str) -> None:
-    """Log dataset periods and sizes into the ACTIVE run (<context>_start, _end, _rows params)."""
-    import mlflow
-
-    for context, df in datasets.items():
-        pickup = df["tpep_pickup_datetime"]
-        mlflow.log_params(
-            {
-                f"{context}_start": f"{pickup.min():%Y-%m-%d}",
-                f"{context}_end": f"{pickup.max():%Y-%m-%d}",
-                f"{context}_rows": len(df),
-            }
-        )
-    mlflow.set_tag("data_source", source)
 
 
 def alias_version(model_name: str, alias: str) -> str | None:

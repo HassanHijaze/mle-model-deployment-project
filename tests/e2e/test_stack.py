@@ -30,11 +30,12 @@ import pandas as pd
 import pytest
 import requests
 
+from src.experiment import MODEL_NAME
+
 pytestmark = pytest.mark.e2e
 
 ROOT = Path(__file__).resolve().parents[2]
 PROJECT = "nyc-taxi-e2e"
-MODEL_NAME = "nyc-taxi-duration-rf"
 MLFLOW_PORT = os.getenv("E2E_MLFLOW_PORT", "15002")
 API_PORT = os.getenv("E2E_API_PORT", "18000")
 ADMIN_TOKEN = os.getenv("E2E_ADMIN_TOKEN", "e2e-admin-token")

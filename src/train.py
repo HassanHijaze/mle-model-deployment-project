@@ -37,7 +37,6 @@ ROOT = Path(__file__).resolve().parents[1]
 DATA_URL = "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_2025-01.parquet"
 DATA_PATH = ROOT / "data" / "yellow_tripdata_2025-01.parquet"
 COLUMNS = ["tpep_pickup_datetime", "tpep_dropoff_datetime", "PULocationID", "DOLocationID"]
-MODEL_NAME = "nyc-taxi-duration-rf"
 BASELINE_RUN_NAME = RF_BASELINE_RUN  # "rf-baseline"
 SAMPLE_SIZE = 500_000  # training-day trips used to fit every Random Forest
 

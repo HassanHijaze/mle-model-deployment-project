@@ -140,3 +140,25 @@ def test_rule_text_states_the_rule():
     assert "test" in text  # the test set is used (after selection)
     unchanged = ("without changing", "not", "never", "unchanged")
     assert "champion" in text and any(word in text for word in unchanged)  # champion is not moved
+
+
+def test_run_selection_stops_early_without_a_usable_rf_baseline(monkeypatch):
+    import mlflow
+
+    import src.tracking as tracking
+    import src.train as train
+
+    monkeypatch.setattr(mlflow, "set_tracking_uri", lambda uri: None)
+    monkeypatch.setattr(mlflow, "set_experiment", lambda name: None)
+    monkeypatch.setattr(tracking, "alias_version", lambda name, alias: None)
+    # only trials: the latest rf-baseline run was dropped (no val_rmse or model_mb)
+    monkeypatch.setattr(
+        selection, "collect_candidates", lambda experiment=None: candidates([("trial-0", 4.4, 50.0)])
+    )
+
+    def no_data():
+        raise AssertionError("data must not be loaded before the check")
+
+    monkeypatch.setattr(train, "load_splits", no_data)
+    with pytest.raises(LookupError, match="rf-baseline"):
+        selection.run_selection()

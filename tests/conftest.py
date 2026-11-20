@@ -12,8 +12,9 @@ from pathlib import Path
 
 import pytest
 
+from src.experiment import MODEL_NAME
+
 ROOT = Path(__file__).resolve().parents[1]
-MODEL_NAME = "nyc-taxi-duration-rf"
 MODEL_ALIAS = "champion"
 TRACKING_URI = os.getenv("MLFLOW_TRACKING_URI", "http://localhost:5002")
 

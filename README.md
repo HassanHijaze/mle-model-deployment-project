@@ -22,6 +22,19 @@ smallest model (`model_mb`) among them wins. The numbers are in the `select` run
 [notebooks/model_serving_selection.ipynb](notebooks/model_serving_selection.ipynb); the data analysis is
 in [notebooks/exploration.ipynb](notebooks/exploration.ipynb).
 
+Latest `select` run (2026-11-20; 9 of 21 candidates tied within 1%), from the notebook outputs. Every
+model learned from Jan 1–20 only; test = Jan 26–31, scored once:
+
+| Model | Validation RMSE | Test RMSE | Test MAE | Size |
+|---|---:|---:|---:|---:|
+| Overall median | 9.9949 | 10.1225 | 6.9366 | – |
+| Zone-pair median | 5.4437 | 5.4237 | 3.6200 | – |
+| RF baseline | 4.4771 | 4.4837 | 3.1329 | – |
+| **Winner: trial-1** | **4.4435** | **4.4415** | **3.1041** | **112.4 MiB** |
+
+RMSE and MAE in minutes. trial-1 is 0.34% above the best validation RMSE (inside the 1% tolerance) and
+the smallest of the tied models. It is registered as version 8 of `nyc-taxi-duration-rf`.
+
 Only the winner is registered (as a version of `nyc-taxi-duration-rf`, without an alias). Serve it by
 giving it the `champion` alias: [docs/operations.md](docs/operations.md).
 
@@ -35,8 +48,15 @@ uv run nyc-taxi all                # trains, tunes, selects and registers the wi
 
 `all` runs `data` → `train` → `tune` → `select` (also available one by one); the winner is registered without an alias.
 Check a version with `uv run nyc-taxi verify <version>`, set `champion` in the MLflow UI (localhost:5002),
-start the API with `docker compose up -d api`, then
-`curl -X POST http://localhost:8000/reload -H "X-Admin-Token: $ADMIN_TOKEN"`. The notebooks only read the results from MLflow.
+then start the API and load the champion:
+
+```bash
+docker compose up -d api
+export $(grep ADMIN_TOKEN .env)    # the token for /reload, from .env
+curl -X POST http://localhost:8000/reload -H "X-Admin-Token: $ADMIN_TOKEN"
+```
+
+The notebooks only read the results from MLflow.
 
 ## API
 
@@ -108,12 +128,13 @@ synthetic models and always removes its containers and volumes; it never touches
 ## Project Questions
 
 **1. What is the RMSE of the final model?**
-The test RMSE (Jan 26–31) of the selected model, computed once by `nyc-taxi select`. It is logged in the
-`select` run (`test_rmse`) and shown in [notebooks/model_serving_selection.ipynb](notebooks/model_serving_selection.ipynb), section 5.
+**4.4415 minutes** on the test days (Jan 26–31) for the selected model (trial-1), computed once by
+`nyc-taxi select` (`test_rmse` in the `select` run; [notebooks/model_serving_selection.ipynb](notebooks/model_serving_selection.ipynb), section 5).
 
 **2. What would you do differently with more time?**
 - **Add new information:** live traffic, exact pickup and drop-off locations or event data, since zones and time alone limit how precise predictions can be.
 - **Use more history:** train on several months to cover seasons, weather and holidays.
 - **Train on all training trips:** every Random Forest is fitted on a 500k sample of the training days.
-- **Reduce model size:** larger leaves or fewer trees for cheaper serving.
+- **Search for smaller models directly:** the selection already picks the smallest model within 1% of the best RMSE;
+  adding size to the Optuna objective (or limiting depth and leaves) could find even smaller ones.
 - **Return prediction ranges:** derived from the spread of the trees, most useful for airport trips.
