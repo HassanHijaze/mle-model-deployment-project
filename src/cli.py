@@ -1,26 +1,24 @@
 """One-command pipeline for the NYC taxi trip-duration project.
 
-    uv run nyc-taxi all       # data -> tune -> train -> select, stops on the first error
+    uv run nyc-taxi all       # data -> train -> tune -> select, stops on the first error
+
+January 2025 only, fixed splits: train Jan 1-20, validation Jan 21-25, test Jan 26-31.
+Every model is fitted on the training days only; test is used once, by select.
 
 Subcommands:
-    data     download January and February 2025 into data/ and build the zone table
-    tune     src.tuning: Optuna search on the 500k sample, MLflow run "optuna-tuning"
-    train    src.train: baseline runs (overall median, zone-pair median, rf-baseline - registered)
-             scored on validation and test, + tuned 200-tree test score (rf-final-jan1-25)
-    select   src.serving_selection run: candidates, benchmarks, selection rule, February
-             evaluation, registers the selected model WITHOUT an alias
-    all      data, tune, train and select in that order
+    data     download January 2025 into data/ and build the zone table
+    train    src.train: baselines (overall median, zone-pair median, RF baseline),
+             scored on validation, one MLflow run each
+    tune     src.tuning: Optuna, 20 trials on validation, run "optuna-tuning"
+    select   src.selection: the rule (lowest validation RMSE; within 1% = tied; smallest
+             model wins), the winner refitted and scored once on test with the baselines,
+             registered WITHOUT an alias (run "select")
+    all      data, train, tune and select in that order
     verify   check one registered version in a fresh process (model, feature schema, zone
              table, test predictions) and print OK or the exact problem
 
-train and select use the best params of the latest "optuna-tuning" run in MLflow
-(fallback: BEST_PARAMS in src/train.py, with a printed note).
-
 The MLflow address comes from MLFLOW_TRACKING_URI (default http://localhost:5002).
 The champion alias is never moved: set it by hand in the MLflow UI.
-
-Expected runtime: data ~2-3 min (first download), tune ~15-40 min, train ~15-30 min,
-select ~1-1.5 h; peak RAM 6-8 GB.
 """
 
 from __future__ import annotations
@@ -61,13 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
         prog="nyc-taxi", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
-    sub.add_parser("data", help="download January and February 2025 and build the zone table")
-    sub.add_parser("tune", help="Optuna search on the 500k sample, logged as MLflow run optuna-tuning")
-    sub.add_parser(
-        "train", help="baselines (median, zone-pair median, RF) + tuned 200-tree test score, logged to MLflow"
-    )
-    sub.add_parser("select", help="choose, evaluate on February and register the serving model (no alias)")
-    sub.add_parser("all", help="data -> tune -> train -> select, stopping on the first error")
+    sub.add_parser("data", help="download January 2025 and build the zone table")
+    sub.add_parser("train", help="baselines (median, zone-pair median, RF) scored on validation")
+    sub.add_parser("tune", help="Optuna, 20 trials on validation, logged as MLflow run optuna-tuning")
+    sub.add_parser("select", help="apply the rule, score the winner once on test, register it (no alias)")
+    sub.add_parser("all", help="data -> train -> tune -> select, stopping on the first error")
     v = sub.add_parser("verify", help="check one registered model version before promoting it")
     v.add_argument("version", type=_model_version, help="registered version number of nyc-taxi-duration-rf")
     return parser
@@ -98,15 +94,14 @@ def check_mlflow() -> str:
 
 
 def run_data() -> dict:
+    from src.evaluation import describe_period
     from src.features import build_zone_xy
-    from src.serving_selection import DATA_DIR, describe_period, load_month
-    from src.train import DATA_PATH, download_january, load_january
+    from src.train import DATA_PATH, ROOT, download_january, load_january
 
     if not DATA_PATH.exists():
         download_january()
-    print("January: ", describe_period(load_january()))
-    print("February:", describe_period(load_month(2025, 2)))  # downloads on first use
-    zones = build_zone_xy(DATA_DIR)  # downloads the TLC zone shapefile on first use
+    print("January:", describe_period(load_january()))
+    zones = build_zone_xy(ROOT / "data")  # downloads the TLC zone shapefile on first use
     print(f"Zone table: {len(zones)} zones")
     return {}
 
@@ -127,15 +122,15 @@ def run_train() -> dict:
 
 def run_select() -> dict:
     check_mlflow()
-    from src.serving_selection import run_selection
+    from src.selection import run_selection
 
     return run_selection()
 
 
 STEPS: dict[str, Callable[[], dict]] = {
     "data": run_data,
-    "tune": run_tune,
     "train": run_train,
+    "tune": run_tune,
     "select": run_select,
 }  # "all" order
 
@@ -161,14 +156,14 @@ def run_step(name: str) -> dict:
 
 def print_next_steps(results: dict) -> None:
     """Registered versions, the (unchanged) champion and how to promote a version."""
-    from src.serving_selection import alias_version
+    from src.tracking import alias_version
     from src.train import MODEL_NAME
 
-    print(f"\nRegistered versions of {MODEL_NAME} (no alias set):")
-    if "baseline_version" in results:
-        print(f"  rf-baseline:                 version {results['baseline_version']}")
     if "registered_version" in results:
-        print(f"  serving model ({results.get('selected', '?')}): version {results['registered_version']}")
+        print(
+            f"\nWinner {results.get('selected', '?')}: registered {MODEL_NAME} "
+            f"version {results['registered_version']} (no alias set)"
+        )
     print(f"  champion alias (unchanged):  {alias_version(MODEL_NAME, 'champion') or 'not set'}")
     print("\nNext steps (docs/operations.md):")
     print("  1. uv run nyc-taxi verify <version>")
@@ -203,7 +198,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "all":
         print(f"\nPipeline finished in {_elapsed(time.perf_counter() - t0)}")
-    if args.command in ("train", "select", "all"):  # the commands that register models
+    if args.command in ("select", "all"):  # the commands that register a model
         print_next_steps(results)
     return 0
 

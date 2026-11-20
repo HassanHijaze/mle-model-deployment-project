@@ -1,24 +1,24 @@
-"""Hyperparameter tuning with Optuna, logged to MLflow as nested runs.
+"""The `nyc-taxi tune` step: Optuna search, logged to MLflow as nested runs.
 
     uv run nyc-taxi tune      (or uv run python -m src.tuning)
 
-Runs 20 TPE trials on the 500k-trip sample (the same sample as rf-baseline): fit on the
-sample's training days (Jan 1-20), minimise RMSE on its validation days (Jan 21-25).
-The test days are never used. Logged as one parent run "optuna-tuning" with one child
-run per trial; the parent holds best_<param> params and the best_val_rmse metric, which
-`nyc-taxi train` and `select` read (src.train.load_tuned_params).
-
-Runtime: roughly 15-40 min (all CPU cores), < 3 GB RAM. The MLflow server must be running.
+20 TPE trials. Each trial fits a Random Forest on the training sample (Jan 1-20, see
+src.train.training_sample) and scores it on all validation trips (Jan 21-25). The test
+days are never used. Logged as one parent run "optuna-tuning" with one child run per
+trial (params, val_rmse, val_mae, model_mb); the parent holds best_<param> params and
+best_val_rmse. `nyc-taxi select` reads every trial.
 """
+
+from __future__ import annotations
 
 import mlflow
 import optuna
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.metrics import root_mean_squared_error
 
+from src import evaluation as ev
 from src.experiment import EXPERIMENT, TRACKING_URI
 
 N_TRIALS = 20
+TUNING_RUN_NAME = "optuna-tuning"
 
 
 def tune_random_forest(
@@ -26,9 +26,9 @@ def tune_random_forest(
 ):
     """Search Random Forest settings on validation RMSE.
 
-    Each trial is logged as a child run under one parent run "optuna-tuning".
-    extra_params (optional) are logged on the parent, e.g. the sample size.
-    Returns the Optuna study (use study.best_params and study.best_value).
+    Each trial is a child run of "optuna-tuning" logging its params, val_rmse, val_mae and
+    model_mb (skops size). extra_params (optional) are logged on the parent.
+    Returns the Optuna study (study.best_params, study.best_value).
     """
     mlflow.set_tracking_uri(TRACKING_URI)
     mlflow.set_experiment(experiment)
@@ -41,14 +41,15 @@ def tune_random_forest(
             "max_features": trial.suggest_categorical("max_features", [1.0, 0.7, 0.5]),
         }
         with mlflow.start_run(run_name=f"trial-{trial.number}", nested=True):
-            model = RandomForestRegressor(**params, n_jobs=-1, random_state=42)
-            model.fit(X_train, y_train)
-            rmse = root_mean_squared_error(y_val, model.predict(X_val))
+            model = ev.fit_rf(params, X_train, y_train)
+            metrics = ev.regression_metrics(y_val, model.predict(X_val), prefix="val_")
+            metrics["model_mb"] = ev.model_size_mb(model)
+            del model
             mlflow.log_params(params)
-            mlflow.log_metric("val_rmse", rmse)
-        return rmse
+            mlflow.log_metrics(metrics)
+        return metrics["val_rmse"]
 
-    with mlflow.start_run(run_name="optuna-tuning"):
+    with mlflow.start_run(run_name=TUNING_RUN_NAME):
         if extra_params:
             mlflow.log_params(extra_params)
         study = optuna.create_study(direction="minimize", sampler=optuna.samplers.TPESampler(seed=seed))
@@ -56,37 +57,30 @@ def tune_random_forest(
         mlflow.log_params({f"best_{k}": v for k, v in study.best_params.items()})
         mlflow.log_metric("best_val_rmse", study.best_value)
 
-    print(f"Best RMSE: {study.best_value:.3f}")
+    print(f"Best validation RMSE: {study.best_value:.4f}")
     print("Best params:", study.best_params)
     return study
 
 
 def main(n_trials: int = N_TRIALS) -> dict:
-    """Tune on the 500k sample (train Jan 1-20, validate Jan 21-25) and log to MLflow.
-
-    Returns {"best_params": ..., "best_val_rmse": ...}.
-    """
+    """Tune on the training sample (Jan 1-20), score on validation (Jan 21-25), log to MLflow."""
     from src.features import build_features, build_zone_xy
-    from src.train import BEST_PARAMS, ROOT, SAMPLE_SIZE, load_data, split_by_time
+    from src.train import ROOT, load_splits, period_params
 
-    sample = load_data(SAMPLE_SIZE)  # same 500k sample as rf-baseline
-    X, y = build_features(sample, build_zone_xy(ROOT / "data")), sample["duration"]
-    tr, va, _ = split_by_time(sample)
-    print(f"Sample: train {tr.sum():,}  validation {va.sum():,} (test days not used)")
+    splits = load_splits()
+    zone_xy = build_zone_xy(ROOT / "data")
+    X_train, y_train = build_features(splits.sample, zone_xy), splits.sample["duration"]
+    X_val, y_val = build_features(splits.val, zone_xy), splits.val["duration"]
+    print(f"Training sample: {len(X_train):,} trips (Jan 1-20); validation: {len(X_val):,} trips (Jan 21-25)")
 
     study = tune_random_forest(
-        X[tr],
-        y[tr],
-        X[va],
-        y[va],
+        X_train,
+        y_train,
+        X_val,
+        y_val,
         n_trials=n_trials,
-        extra_params={"sample_size": len(sample), "n_trials": n_trials},
+        extra_params={"n_trials": n_trials, **period_params(splits)},
     )
-    if study.best_params != BEST_PARAMS:
-        print(
-            f"Note: the best params differ from the fallback BEST_PARAMS in src/train.py "
-            f"{BEST_PARAMS}; train and select use the new ones from MLflow."
-        )
     return {"best_params": study.best_params, "best_val_rmse": study.best_value}
 
 

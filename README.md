@@ -7,44 +7,33 @@ Predicts NYC yellow taxi trip duration from the pickup zone, drop-off zone and p
 
 ## Results
 
-Time-based split on 1–60 minute trips: **train Jan 1–20 · validation Jan 21–25 · test Jan 26–31**
+January 2025 only, fixed time-based split on 1–60 minute trips:
+**train Jan 1–20 · validation Jan 21–25 · test Jan 26–31.** Every model is trained on the training days
+only, compared on validation, and the selected model is scored once on test.
 
-| Model | Val RMSE | Test RMSE |
-|---|---:|---:|
-| Overall median (naive) | 9.995 | 10.090 |
-| Median per zone pair (naive) | 5.444 | 5.327 |
-| Random Forest baseline | 4.509 | 4.509 |
-| Optuna-tuned | 4.466 | 4.462 |
-| **Final model** | –¹ | **4.312** |
-
-
-
-**Takeaways**
-- The final model is **19% better** than the zone-pair median and **57% better** than a single guess.
-- **More data beat tuning:** tuning gained ~1%, training on all trips another ~3%.
-- **Trade-off:** the final model is several GB; the baseline is 4% worse.
-
-Full analysis: [notebooks/exploration.ipynb](notebooks/exploration.ipynb)
-
-### Model serving options
-
-Both registered models are versions of `nyc-taxi-duration-rf`. Serve one by assigning it the `champion` alias.
-The final Jan 1–25 model (`rf-final-jan1-25`) is only scored, not logged: it is several GB.
-
-| Model | Chosen by | Size |
+| Step | MLflow run(s) | What it holds |
 |---|---|---|
-| **Serving model** (`serving-selection`) | accuracy/size/RAM/latency rule, tested on February | under 700 MB |
-| **Baseline** (`rf-baseline`) | 50-tree baseline on a 500k sample | small |
+| `nyc-taxi train` | `baseline-overall-median`, `baseline-zone-pair-median`, `rf-baseline` | validation RMSE/MAE of the baselines |
+| `nyc-taxi tune` | `optuna-tuning` (20 trial runs) | validation RMSE/MAE and model size of every trial |
+| `nyc-taxi select` | `select` | the rule, the tied runs, the winner and the test comparison; registers the winner |
+
+**Selection rule:** the lowest validation RMSE wins, but runs within 1% of the best count as tied and the
+smallest model (`model_mb`) among them wins. The numbers are in the `select` run and in
+[notebooks/model_serving_selection.ipynb](notebooks/model_serving_selection.ipynb); the data analysis is
+in [notebooks/exploration.ipynb](notebooks/exploration.ipynb).
+
+Only the winner is registered (as a version of `nyc-taxi-duration-rf`, without an alias). Serve it by
+giving it the `champion` alias: [docs/operations.md](docs/operations.md).
 
 ## Quick Start
 
 ```bash
 uv sync && cp .env.example .env    # once
 docker compose up -d postgres mlflow
-uv run nyc-taxi all                # tunes, trains, selects and registers the models
+uv run nyc-taxi all                # trains, tunes, selects and registers the winner
 ```
 
-`all` runs `data` → `tune` → `train` → `select` (also available one by one); models are registered without an alias.
+`all` runs `data` → `train` → `tune` → `select` (also available one by one); the winner is registered without an alias.
 Check a version with `uv run nyc-taxi verify <version>`, set `champion` in the MLflow UI (localhost:5002),
 start the API with `docker compose up -d api`, then
 `curl -X POST http://localhost:8000/reload -H "X-Admin-Token: $ADMIN_TOKEN"`. The notebooks only read the results from MLflow.
@@ -96,11 +85,12 @@ synthetic models and always removes its containers and volumes; it never touches
 ## Project Questions
 
 **1. What is the RMSE of the final model?**
-**4.31 minutes** on the test set (680,825 trips, Jan 26–31), RMSLE 0.304.
+The test RMSE (Jan 26–31) of the selected model, computed once by `nyc-taxi select`. It is logged in the
+`select` run (`test_rmse`) and shown in [notebooks/model_serving_selection.ipynb](notebooks/model_serving_selection.ipynb), section 5.
 
 **2. What would you do differently with more time?**
 - **Add new information:** live traffic, exact pickup and drop-off locations or event data, since zones and time alone limit how precise predictions can be.
 - **Use more history:** train on several months to cover seasons, weather and holidays.
-- **Re-tune on full data:** hyperparameters were tuned on a 500k sample.
+- **Train on all training trips:** every Random Forest is fitted on a 500k sample of the training days.
 - **Reduce model size:** larger leaves or fewer trees for cheaper serving.
 - **Return prediction ranges:** derived from the spread of the trees, most useful for airport trips.

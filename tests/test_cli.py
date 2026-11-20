@@ -7,7 +7,7 @@ import pytest
 
 from src import cli
 
-STEP_ORDER = ["data", "tune", "train", "select"]
+STEP_ORDER = ["data", "train", "tune", "select"]
 
 
 def record_steps(monkeypatch, calls, fail_at=None):
@@ -37,7 +37,7 @@ def test_parser_rejects_missing_or_unknown_arguments(argv):
     assert exc.value.code == 2
 
 
-def test_all_runs_data_tune_train_select_in_order(monkeypatch):
+def test_all_runs_data_train_tune_select_in_order(monkeypatch):
     calls = []
     monkeypatch.setattr(cli, "check_mlflow", lambda: "http://test")
     monkeypatch.setattr(cli, "print_next_steps", lambda results: None)
@@ -52,7 +52,7 @@ def test_all_stops_on_the_first_failing_step(monkeypatch):
     record_steps(monkeypatch, calls, fail_at="tune")
     with pytest.raises(RuntimeError, match="tune failed"):
         cli.main(["all"])
-    assert calls == ["data", "tune"]  # train and select never start
+    assert calls == ["data", "train", "tune"]  # select never starts
 
 
 @pytest.mark.parametrize("command", STEP_ORDER)

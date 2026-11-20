@@ -61,7 +61,7 @@ NAIVE_BASELINES = {
 
 def read_baseline_runs(experiment: str = "nyc-taxi-duration") -> tuple[dict, list[str]]:
     """Latest finished run of each baseline: ({label: mlflow Run}, [missing run names])."""
-    from src.serving_selection import latest_run
+    from src.tracking import latest_run
 
     runs, missing = {}, []
     for label, run_name in BASELINE_RUNS.items():

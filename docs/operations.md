@@ -4,10 +4,21 @@ The API serves the version of `nyc-taxi-duration-rf` that has the **`champion`**
 that alias automatically: the pipeline registers new versions without an alias, and you move it by
 hand. `/reload` needs the `X-Admin-Token` header (value: `ADMIN_TOKEN` from `.env`).
 
+## Selection rule (fixed before the results)
+
+Data: January 2025. Every model is trained on Jan 1–20 only, compared on validation (Jan 21–25), and
+only the winner is scored on test (Jan 26–31), once, next to the baselines.
+
+Candidates: the RF baseline (`nyc-taxi train`) and every Optuna trial (`nyc-taxi tune`).
+
+1. Best: the lowest validation RMSE.
+2. Tied: every candidate within 1% of the best validation RMSE.
+3. Winner: the smallest model (`model_mb`) among the tied candidates.
+
 ## Promote a new version
 
-1. **Register.** `uv run nyc-taxi all` (or `train` / `select`) registers new versions and prints
-   their numbers.
+1. **Register.** `uv run nyc-taxi all` (or `select` after `train` and `tune`) applies the selection
+   rule above, scores the winner once on test and registers it; it prints the version number.
 2. **Verify.**
 
    ```bash

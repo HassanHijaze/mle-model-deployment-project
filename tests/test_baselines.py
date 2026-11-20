@@ -10,7 +10,8 @@ from src.baselines import (
     overall_median_predict,
     zone_pair_median_predict,
 )
-from src.train import evaluation_periods, score_predictions
+from src.evaluation import score_predictions
+from src.train import make_splits, training_sample
 
 
 def trips(rows, start=0):
@@ -68,21 +69,29 @@ def test_every_naive_baseline_has_a_function_and_a_description():
         assert run_name.startswith("baseline-") and callable(predict) and description
 
 
-def test_evaluation_periods_learn_from_training_days_only():
-    days = pd.date_range("2025-01-01 08:00", "2025-01-31 08:00", freq="D")
-    full = pd.DataFrame(
-        {"tpep_pickup_datetime": days, "PULocationID": 1, "DOLocationID": 2, "duration": 10.0}
+def january(hours_step: int = 6) -> pd.DataFrame:
+    pickup = pd.date_range("2025-01-01 00:00", "2025-01-31 23:00", freq=f"{hours_step}h")
+    return pd.DataFrame(
+        {"tpep_pickup_datetime": pickup, "PULocationID": 1, "DOLocationID": 2, "duration": 10.0}
     )
-    periods = evaluation_periods(full)
 
-    val_train, val_eval = periods["val"]
-    assert val_train["tpep_pickup_datetime"].max() < pd.Timestamp("2025-01-21")
-    assert val_eval["tpep_pickup_datetime"].dt.day.tolist() == [21, 22, 23, 24, 25]
 
-    test_train, test_eval = periods["test"]
-    assert test_train["tpep_pickup_datetime"].max() < pd.Timestamp("2025-01-26")
-    assert test_train["tpep_pickup_datetime"].dt.day.max() == 25
-    assert test_eval["tpep_pickup_datetime"].dt.day.min() == 26
+def test_splits_are_fixed_january_periods():
+    splits = make_splits(january())
+    assert splits.train["tpep_pickup_datetime"].max() < pd.Timestamp("2025-01-21")
+    assert splits.val["tpep_pickup_datetime"].dt.day.unique().tolist() == [21, 22, 23, 24, 25]
+    assert splits.test["tpep_pickup_datetime"].dt.day.min() == 26
+    assert len(splits.train) + len(splits.val) + len(splits.test) == len(january())
+
+
+def test_training_sample_uses_training_days_only_and_is_repeatable():
+    splits = make_splits(january(hours_step=1))
+    sample = training_sample(splits.train, n=50)
+    assert len(sample) == 50
+    assert sample.index.isin(splits.train.index).all()
+    assert sample["tpep_pickup_datetime"].is_monotonic_increasing
+    assert sample.index.equals(training_sample(splits.train, n=50).index)  # same seed, same trips
+    assert training_sample(splits.train, n=10_000).index.equals(splits.train.index)  # smaller than n: all
 
 
 def test_score_predictions_logs_split_prefixed_metrics():
