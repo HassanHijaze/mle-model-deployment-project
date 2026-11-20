@@ -12,6 +12,7 @@ Endpoints:
     GET  /live      the process is alive
     GET  /ready     a validated model is loaded (503 otherwise)
     GET  /health    model, zone table and last reload status
+    GET  /metrics   Prometheus metrics (app/metrics.py); not written to the request log
 
 Every response has an X-Request-ID header; errors use one JSON format (app/observability.py).
 The API never moves the champion alias.
@@ -36,6 +37,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app import metrics
 from app.observability import REQUEST_ID_HEADER, error_body, request_id_var, resolve_request_id, setup_logging
 from src import bundle as bundle_lib
 from src.features import build_features
@@ -90,13 +92,28 @@ def load_champion() -> bundle_lib.Bundle:
     return bundle_lib.fetch_bundle(MODEL_NAME, alias=MODEL_ALIAS)
 
 
-def load_and_validate() -> bundle_lib.Bundle:
-    """Fetch the champion bundle and validate it. Raises BundleLoadError or InvalidBundleError."""
-    new = load_champion()
-    problems = bundle_lib.validate_bundle(new)
-    if problems:
-        raise InvalidBundleError(new.version, problems)
-    return new
+def load_and_validate(source: str = "reload") -> bundle_lib.Bundle:
+    """Fetch the champion bundle and validate it. Raises BundleLoadError or InvalidBundleError.
+
+    The duration is recorded in taxi_api_model_load_duration_seconds{source, outcome}.
+    """
+    start = time.perf_counter()
+    outcome = "error"
+    try:
+        new = load_champion()
+        problems = bundle_lib.validate_bundle(new)
+        if problems:
+            outcome = "invalid_bundle"
+            raise InvalidBundleError(new.version, problems)
+        outcome = "ok"
+        return new
+    except bundle_lib.BundleLoadError:
+        outcome = "load_failed"
+        raise
+    finally:
+        metrics.MODEL_LOAD_DURATION.labels(source=source, outcome=outcome).observe(
+            time.perf_counter() - start
+        )
 
 
 def current_bundle() -> bundle_lib.Bundle | None:
@@ -119,6 +136,7 @@ def _swap(new: bundle_lib.Bundle | None) -> None:
     global _bundle
     with _state_lock:
         _bundle = new
+        metrics.set_active_model(new.version if new is not None else None)
 
 
 @asynccontextmanager
@@ -129,7 +147,7 @@ async def lifespan(app: FastAPI):
     /health shows the reason; an authenticated /reload can load a model later.
     """
     try:
-        new = load_and_validate()
+        new = load_and_validate(source="startup")
     except bundle_lib.BundleLoadError as exc:
         logger.warning("No champion model at startup", extra={"event": "startup", "reason": str(exc)})
         _record("startup", False, None, str(exc))
@@ -164,7 +182,7 @@ def _request_id(request: Request) -> str | None:
 
 @app.middleware("http")
 async def request_context(request: Request, call_next):
-    """X-Request-ID on every response, one JSON log line per request, JSON 500s."""
+    """X-Request-ID on every response, request metrics, one JSON log line per request, JSON 500s."""
     request_id = resolve_request_id(request.headers.get(REQUEST_ID_HEADER))
     request.state.request_id = request_id
     token = request_id_var.set(request_id)
@@ -178,16 +196,21 @@ async def request_context(request: Request, call_next):
                 status_code=500, content=error_body("internal_error", "Internal server error.", request_id)
             )
         response.headers[REQUEST_ID_HEADER] = request_id
-        logger.info(
-            "request finished",
-            extra={
-                "method": request.method,
-                "path": request.url.path,
-                "status_code": response.status_code,
-                "duration_ms": round((time.perf_counter() - start) * 1000, 2),
-                "model_version": getattr(request.state, "model_version", None),
-            },
-        )
+        duration = time.perf_counter() - start
+        route = getattr(request.scope.get("route"), "path", None) or "unmatched"  # template, not raw URL
+        metrics.REQUESTS.labels(method=request.method, route=route, status=str(response.status_code)).inc()
+        metrics.REQUEST_LATENCY.labels(method=request.method, route=route).observe(duration)
+        if route != "/metrics":  # scraped every few seconds: kept out of the request log
+            logger.info(
+                "request finished",
+                extra={
+                    "method": request.method,
+                    "path": request.url.path,
+                    "status_code": response.status_code,
+                    "duration_ms": round(duration * 1000, 2),
+                    "model_version": getattr(request.state, "model_version", None),
+                },
+            )
         return response
     finally:
         request_id_var.reset(token)
@@ -257,6 +280,7 @@ class Prediction(BaseModel):
 def predict(trip: Trip, request: Request, response: Response) -> Prediction:
     current = current_bundle()  # one reference: a reload swapping meanwhile does not affect this request
     if current is None:
+        metrics.PREDICTION_ERRORS.labels(reason="model_not_loaded").inc()
         raise ApiError(
             503, "model_not_loaded", "No model loaded. Register a champion model and call /reload."
         )
@@ -270,8 +294,13 @@ def predict(trip: Trip, request: Request, response: Response) -> Prediction:
             }
         ]
     )
-    minutes = float(current.model.predict(build_features(df, current.zone_xy))[0])
+    try:
+        minutes = float(current.model.predict(build_features(df, current.zone_xy))[0])
+    except Exception:
+        metrics.PREDICTION_ERRORS.labels(reason="error").inc()
+        raise  # answered as a JSON 500 by the request middleware
 
+    metrics.PREDICTIONS.labels(model_version=current.version).inc()
     request.state.model_version = current.version
     response.headers[MODEL_VERSION_HEADER] = current.version
     return Prediction(duration_minutes=round(minutes, 2), model_version=current.version)
@@ -296,19 +325,23 @@ def reload(x_admin_token: str | None = Header(default=None)) -> dict:
     (loaded but failed validation, with the list of problems).
     """
     require_admin(x_admin_token)
+    metrics.RELOAD_ATTEMPTS.inc()
     if not _reload_lock.acquire(blocking=False):
+        metrics.RELOAD_FAILURES.labels(reason="in_progress").inc()
         raise ApiError(409, "reload_in_progress", "A reload is already running. Try again shortly.")
     try:
         previous = current_bundle()
         serving = previous.version if previous else None
         try:
-            new = load_and_validate()  # slow part: requests keep using the old bundle meanwhile
+            new = load_and_validate(source="reload")  # slow part: requests keep using the old bundle
         except bundle_lib.BundleLoadError as exc:
+            metrics.RELOAD_FAILURES.labels(reason="load_failed").inc()
             _record("reload", False, None, str(exc))
             raise ApiError(
                 502, "reload_failed", f"Could not load the champion bundle: {exc}", serving_version=serving
             ) from exc
         except InvalidBundleError as exc:
+            metrics.RELOAD_FAILURES.labels(reason="invalid_bundle").inc()
             _record("reload", False, exc.version, f"version {exc.version} failed validation: {exc}")
             raise ApiError(
                 422,
@@ -319,6 +352,7 @@ def reload(x_admin_token: str | None = Header(default=None)) -> dict:
                 serving_version=serving,
             ) from exc
         except Exception as exc:  # e.g. a corrupted model that crashes during validation
+            metrics.RELOAD_FAILURES.labels(reason="error").inc()
             _record("reload", False, None, f"{type(exc).__name__}: {exc}")
             raise ApiError(
                 500, "reload_failed", f"Reload failed: {type(exc).__name__}: {exc}", serving_version=serving
@@ -340,6 +374,13 @@ def reload(x_admin_token: str | None = Header(default=None)) -> dict:
         }
     finally:
         _reload_lock.release()
+
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics() -> Response:
+    """Prometheus metrics in the text exposition format (scraped by the prometheus service)."""
+    body, content_type = metrics.render()
+    return Response(content=body, media_type=content_type)
 
 
 @app.get("/live")

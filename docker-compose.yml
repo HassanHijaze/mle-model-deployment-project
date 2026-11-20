@@ -75,5 +75,25 @@ services:
           memory: ${API_MEMORY_LIMIT:-2g}
           cpus: "${API_CPU_LIMIT:-2}"
 
+  prometheus:
+    image: prom/prometheus:v3.16.0
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --storage.tsdb.retention.time=7d
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - promdata:/prometheus
+    depends_on:
+      - api
+    ports:
+      - "127.0.0.1:9090:9090"   # web UI from this machine only
+    deploy:
+      resources:
+        limits:
+          memory: ${PROMETHEUS_MEMORY_LIMIT:-512m}
+          cpus: "0.5"
+
 volumes:
   pgdata:
+  promdata:

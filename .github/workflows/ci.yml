@@ -2,9 +2,9 @@
 #   lint      ruff format check, ruff lint, mypy (src/ and app/)
 #   security  pip-audit on every locked dependency (runtime + dev)
 #   tests     unit and API tests with fake models (model/MLflow tests skip themselves: no server)
-#   docker    builds the API and MLflow images
+#   docker    builds the API and MLflow images, checks the Prometheus config
 #   e2e       docker compose stack (postgres, mlflow, api) with synthetic models: promote,
-#             upgrade, reject a broken version (tests/e2e); always torn down
+#             upgrade, reject a broken version, /metrics (tests/e2e); always torn down
 name: CI
 
 on:
@@ -85,6 +85,10 @@ jobs:
         run: |
           MLFLOW_VERSION=$(uv export --frozen --no-hashes --format requirements-txt | sed -n 's/^mlflow==//p')
           docker build -f docker/mlflow.Dockerfile --build-arg MLFLOW_VERSION="$MLFLOW_VERSION" -t nyc-taxi-mlflow .
+      - name: Check the Prometheus config
+        run: >
+          docker run --rm -v "$PWD/prometheus:/etc/prometheus:ro" --entrypoint promtool
+          prom/prometheus:v3.16.0 check config /etc/prometheus/prometheus.yml
 
   e2e:
     runs-on: ubuntu-latest

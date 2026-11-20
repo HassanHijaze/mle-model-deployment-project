@@ -58,5 +58,7 @@ Candidates: the RF baseline (`nyc-taxi train`) and every Optuna trial (`nyc-taxi
 - `GET /live`: the process is up (use for liveness / restart decisions).
 - `GET /ready`: a validated model is loaded (use for readiness / traffic decisions).
 - `GET /health`: model, zone table and the result of the last reload.
+- `GET /metrics`: Prometheus metrics (served version, reload attempts/failures, latency); the
+  Prometheus UI at http://localhost:9090 queries them (README "Monitoring").
 - Logs are JSON lines with `request_id` (also returned as the `X-Request-ID` header) and
   `model_version`, so one request can be traced from the response to the logs.

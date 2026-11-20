@@ -10,6 +10,7 @@ registers tiny deterministic synthetic models in the same bundle format as train
     1. version 1 -> champion -> /reload -> /ready and /predict answer with version 1
     2. version 2 -> champion -> /reload -> version 2 answers
     3. broken version 3 -> champion -> /reload is rejected -> version 2 still answers
+    4. /metrics shows the served version, predictions and the rejected reload
 
 The containers and volumes are always removed at the end (docker compose down -v).
 Settings come from the environment (CI sets test values): E2E_ADMIN_TOKEN,
@@ -193,3 +194,10 @@ def test_promote_upgrade_and_reject_broken_version(stack):
     assert body["rejected_version"] == v3 and body["serving_version"] == v2
     assert predict()["model_version"] == v2
     assert requests.get(f"{API_URL}/ready", timeout=5).json()["model_version"] == v2
+
+    # 4. Prometheus metrics: served version, predictions and the rejected reload are visible
+    m = requests.get(f"{API_URL}/metrics", timeout=10)
+    assert m.status_code == 200
+    assert f'taxi_api_model_info{{model_version="{v2}"}} 1.0' in m.text
+    assert "taxi_api_predictions_total" in m.text
+    assert 'taxi_api_reload_failures_total{reason="invalid_bundle"} 1.0' in m.text

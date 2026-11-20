@@ -47,6 +47,7 @@ start the API with `docker compose up -d api`, then
 | `GET /live` | The process is alive |
 | `GET /ready` | A validated model is loaded (503 otherwise) |
 | `GET /health` | Model, zone table and last reload status |
+| `GET /metrics` | Prometheus metrics (see Monitoring) |
 | `GET /` | Web form |
 
 Every response carries `X-Request-ID` (yours, or a new one). Errors share one JSON format:
@@ -60,6 +61,27 @@ curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" \
 
 Zone IDs: 1–265. `pickup_datetime`: NYC local time, no timezone.
 
+## Monitoring
+
+The API exposes Prometheus metrics at `GET /metrics` (requests by route and status, latency histogram,
+predictions and prediction errors, active model version, model load time, reload attempts and
+failures). `docker compose up -d prometheus` scrapes it every 15 s; query it in the Prometheus UI at
+http://localhost:9090. Example queries:
+
+```promql
+# p95 latency of /predict (seconds)
+histogram_quantile(0.95, sum by (le) (rate(taxi_api_request_duration_seconds_bucket{route="/predict"}[5m])))
+# share of requests answered with 5xx
+sum(rate(taxi_api_requests_total{status=~"5.."}[5m])) / sum(rate(taxi_api_requests_total[5m]))
+# predictions per second, by model version
+sum by (model_version) (rate(taxi_api_predictions_total[5m]))
+# model being served, and failed reloads in the last day
+taxi_api_model_info
+increase(taxi_api_reload_failures_total[1d])
+```
+
+Load test (Locust) and results template: [docs/benchmarks.md](docs/benchmarks.md).
+
 ## Tests
 
 | What | Command | Locally | CI job |
@@ -71,6 +93,7 @@ Zone IDs: 1–265. `pickup_datetime`: NYC local time, no timezone.
 | Model and integration tests (real champion) | `uv run pytest` with MLflow and a champion | yes | skipped (no MLflow) |
 | Docker images build | `docker build .` | yes | `docker` |
 | End-to-end: compose stack, promote, upgrade, reject a broken version | `uv run pytest -m e2e tests/e2e` | yes (needs Docker) | `e2e` |
+| Load test (1, 10, 50 users) | `uv run python tests/load/run_load_test.py` | yes (API running) | — |
 
 The end-to-end test starts its own throwaway stack (compose project `nyc-taxi-e2e`, other ports), registers tiny
 synthetic models and always removes its containers and volumes; it never touches the development registry.

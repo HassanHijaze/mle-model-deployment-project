@@ -174,3 +174,5 @@ mlflow.db
 *.skops
 # Artifacts of the throwaway end-to-end test stack
 .e2e-mlartifacts/
+# Load test results (Locust CSV)
+tests/load/results/
