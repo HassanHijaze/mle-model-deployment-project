@@ -1,22 +1,18 @@
-"""The `nyc-taxi select` step: one simple rule, one test score, one registered model.
+"""Model selection: validation-only ranking, one final test, MLflow registration.
 
-    uv run nyc-taxi select     (or uv run python -m src.selection)
+Run:
+    uv run nyc-taxi select
 
-Rule (fixed before the results; also written in docs/operations.md and the notebook):
-    Candidates: the RF baseline ("rf-baseline") and every Optuna trial ("optuna-tuning"),
-    all fitted on the training sample (Jan 1-20) and scored on validation (Jan 21-25).
-    1. best   = the lowest validation RMSE
-    2. tied   = every candidate within 1% of the best validation RMSE
-    3. winner = the smallest model (model_mb) among the tied candidates
+Selection rule:
+    1. Find the lowest validation RMSE.
+    2. Keep candidates within 1% of that RMSE.
+    3. Select the smallest serialized model among those candidates.
 
-The winner's settings are fitted again on the same training sample with the same seed
-(so it is the same model), scored ONCE on test (Jan 26-31), logged with its zone table
-and feature schema and registered WITHOUT an alias. The baselines are scored on the same
-test days, so the final table compares everything on the same trips.
+The selected model is refitted on the same training sample and evaluated
+on the test set only AFTER selection.
 
-Logged as one MLflow run "select": candidates.csv (every candidate, tied, winner),
-test_comparison.csv, selection_rule.txt, rmse_vs_size.png, the winner's metrics, and
-the registered model. The champion alias is never moved.
+Naive baselines are reference models, not serving candidates.
+The MLflow champion alias is never changed automatically.
 """
 
 from __future__ import annotations
@@ -28,42 +24,82 @@ import numpy as np
 import pandas as pd
 
 from src import evaluation as ev
-from src.baselines import NAIVE_BASELINES, OVERALL_MEDIAN_RUN, RF_BASELINE_RUN, ZONE_PAIR_MEDIAN_RUN
+from src.baselines import (
+    NAIVE_BASELINES,
+    OVERALL_MEDIAN_RUN,
+    RF_BASELINE_RUN,
+    ZONE_PAIR_MEDIAN_RUN,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
-OUTPUT_DIR = ROOT / "artifacts" / "selection"  # git-ignored
+OUTPUT_DIR = ROOT / "artifacts" / "selection"
+
 SELECT_RUN_NAME = "select"
 RMSE_TOLERANCE = 0.01
-PARAM_KEYS = ("n_estimators", "max_depth", "min_samples_leaf", "max_features")
+
+PARAM_KEYS = (
+    "n_estimators",
+    "max_depth",
+    "min_samples_leaf",
+    "max_features",
+)
 
 CANDIDATES_FILE = "candidates.csv"
 TEST_FILE = "test_comparison.csv"
 RULE_FILE = "selection_rule.txt"
 CHART_FILE = "rmse_vs_size.png"
 
-NAIVE_LABELS = {OVERALL_MEDIAN_RUN: "Overall median", ZONE_PAIR_MEDIAN_RUN: "Zone-pair median"}
-OFF_CHART_FACTOR = 1.5  # naive baselines above 1.5x the worst candidate RMSE are listed, not drawn
+NAIVE_LABELS = {
+    OVERALL_MEDIAN_RUN: "Overall median",
+    ZONE_PAIR_MEDIAN_RUN: "Zone-pair median",
+}
+
+
+# ------------------------------------------------------------
+# 1. Selection policy
+# ------------------------------------------------------------
 
 
 def rule_text(tolerance: float = RMSE_TOLERANCE) -> str:
-    return f"""Selection rule (fixed before the results)
-Candidates: the RF baseline and every Optuna trial, all fitted on the training sample (Jan 1-20)
-and scored on validation (Jan 21-25). The naive baselines are references, not candidates.
-1. Best: the lowest validation RMSE.
-2. Tied: every candidate whose validation RMSE is within {tolerance:.0%} of the best.
-3. Winner: the smallest model (model_mb, skops size) among the tied candidates.
-Then the winner's settings are fitted again on the same training sample with the same seed
-(the same model), scored once on test (Jan 26-31) and registered without an alias.
-The baselines are scored on the same test days for comparison.
+    return f"""Model selection policy
+
+Training: January 1-20, 2025
+Validation: January 21-25, 2025
+Testing: January 26-31, 2025
+
+Candidates:
+- Random Forest baseline
+- Every Optuna trial
+
+Selection:
+1. Find the lowest validation RMSE.
+2. Keep candidates within {tolerance:.0%} of the best RMSE.
+3. Select the smallest serialized model among them.
+4. Break size ties using validation RMSE.
+
+The selected model is refitted on the same training
+sample using the same random seed.
+
+Only after selection, evaluate on the test set.
+
+Naive baselines are references, not serving candidates.
+
+Register the selected model without changing champion.
 """
 
 
-# ---------------------------------------------------------------------------------
-# Candidates and the rule (pure functions, unit-tested)
-# ---------------------------------------------------------------------------------
+# ------------------------------------------------------------
+# 2. Collect candidates
+# ------------------------------------------------------------
 
 
-def _candidate_row(name: str, run_id: str, metrics: dict, params: dict) -> dict[str, Any]:
+def _candidate_row(
+    name: str,
+    run_id: str,
+    metrics: dict,
+    params: dict,
+) -> dict[str, Any]:
+
     return {
         "candidate": name,
         "run_id": run_id,
@@ -74,62 +110,132 @@ def _candidate_row(name: str, run_id: str, metrics: dict, params: dict) -> dict[
     }
 
 
-def collect_candidates(experiment: str = "nyc-taxi-duration") -> pd.DataFrame:
-    """The latest rf-baseline run and every trial of the latest optuna-tuning run.
+def collect_candidates(
+    experiment: str = "nyc-taxi-duration",
+) -> pd.DataFrame:
+    """Collect RF baseline and Optuna candidates from MLflow."""
 
-    Runs without val_rmse or model_mb (older runs) are left out.
-    """
     from src.tracking import child_runs, latest_run
     from src.tuning import TUNING_RUN_NAME
 
     rf = latest_run(RF_BASELINE_RUN, experiment)
-    rows = [_candidate_row(RF_BASELINE_RUN, rf.info.run_id, dict(rf.data.metrics), dict(rf.data.params))]
-    tuning = latest_run(TUNING_RUN_NAME, experiment)
-    for record in child_runs(tuning.info.run_id, experiment).to_dict("records"):
-        metrics = {k.removeprefix("metrics."): v for k, v in record.items() if k.startswith("metrics.")}
-        params = {k.removeprefix("params."): v for k, v in record.items() if k.startswith("params.")}
-        rows.append(_candidate_row(record["tags.mlflow.runName"], record["run_id"], metrics, params))
 
-    candidates = pd.DataFrame(rows).dropna(subset=["val_rmse", "model_mb"]).reset_index(drop=True)
-    if candidates.empty:
-        raise LookupError(
-            "No candidate run has val_rmse and model_mb. "
-            "Run `uv run nyc-taxi train` and `uv run nyc-taxi tune`."
+    rows = [
+        _candidate_row(
+            RF_BASELINE_RUN,
+            rf.info.run_id,
+            dict(rf.data.metrics),
+            dict(rf.data.params),
         )
-    return candidates
+    ]
 
+    tuning = latest_run(TUNING_RUN_NAME, experiment)
 
-def apply_rule(candidates: pd.DataFrame, tolerance: float = RMSE_TOLERANCE) -> pd.DataFrame:
-    """Adds rmse_vs_best_pct, tied and winner; winner first, then tied, then the rest by RMSE."""
-    df = candidates.copy()
-    best = df["val_rmse"].min()
-    df["rmse_vs_best_pct"] = (df["val_rmse"] / best - 1) * 100
-    df["tied"] = df["val_rmse"] <= best * (1 + tolerance)
-    winner = df[df["tied"]].sort_values(["model_mb", "val_rmse"]).index[0]
-    df["winner"] = df.index == winner
-    return df.sort_values(["winner", "tied", "val_rmse"], ascending=[False, False, True]).reset_index(
-        drop=True
+    trials = child_runs(
+        tuning.info.run_id,
+        experiment,
     )
 
+    for record in trials.to_dict("records"):
+        metrics = {k.removeprefix("metrics."): v for k, v in record.items() if k.startswith("metrics.")}
 
-def candidate_params(row: pd.Series | dict) -> dict[str, int | float]:
-    """Random Forest params of a candidate (MLflow stores them as text).
+        params = {k.removeprefix("params."): v for k, v in record.items() if k.startswith("params.")}
 
-    max_features stays a float (1.0 = all features; the integer 1 would mean one feature).
-    Params a run did not set are left out, so scikit-learn's defaults apply as in that run.
-    """
-    params: dict[str, int | float] = {}
+        rows.append(
+            _candidate_row(
+                record["tags.mlflow.runName"],
+                record["run_id"],
+                metrics,
+                params,
+            )
+        )
+
+    df = pd.DataFrame(rows)
+
+    df = df.dropna(subset=["val_rmse", "model_mb"]).reset_index(drop=True)
+
+    if df.empty:
+        raise LookupError("No valid candidates found. Run nyc-taxi train and nyc-taxi tune first.")
+
+    return df
+
+
+# ------------------------------------------------------------
+# 3. Apply selection rule
+# ------------------------------------------------------------
+
+
+def apply_rule(
+    candidates: pd.DataFrame,
+    tolerance: float = RMSE_TOLERANCE,
+) -> pd.DataFrame:
+    """Select the smallest model within the RMSE tolerance."""
+
+    if not 0 <= tolerance < 1:
+        raise ValueError("tolerance must be a fraction between 0 and 1.")
+
+    df = candidates.copy()
+
+    if df.empty:
+        raise ValueError("Candidate table is empty.")
+
+    for column in ("val_rmse", "model_mb"):
+        df[column] = pd.to_numeric(df[column], errors="raise")
+
+    if not np.isfinite(df[["val_rmse", "model_mb"]].to_numpy()).all():
+        raise ValueError("Candidate metrics must be finite.")
+
+    if (df["val_rmse"] <= 0).any():
+        raise ValueError("RMSE must be positive.")
+
+    if (df["model_mb"] <= 0).any():
+        raise ValueError("Model sizes must be positive.")
+
+    best = df["val_rmse"].min()
+
+    df["rmse_vs_best_pct"] = (df["val_rmse"] / best - 1) * 100
+
+    df["tied"] = df["val_rmse"] <= best * (1 + tolerance)
+
+    tied = df.loc[df["tied"]]
+
+    winner_index = tied.sort_values(["model_mb", "val_rmse"]).index[0]
+
+    df["winner"] = df.index == winner_index
+
+    return df.sort_values(
+        ["winner", "tied", "val_rmse"],
+        ascending=[False, False, True],
+    ).reset_index(drop=True)
+
+
+def candidate_params(
+    row: pd.Series | dict,
+) -> dict[str, int | float]:
+    """Recover Random Forest hyperparameters from MLflow."""
+
+    params = {}
+
     for key in PARAM_KEYS:
         value = row.get(key)
-        if value is None or value == "" or (isinstance(value, float) and np.isnan(value)):
+
+        if value is None or value == "":
             continue
-        params[key] = float(value) if key == "max_features" else int(float(value))
+
+        if pd.isna(value):
+            continue
+
+        if key == "max_features":
+            params[key] = float(value)
+        else:
+            params[key] = int(float(value))
+
     return params
 
 
-# ---------------------------------------------------------------------------------
-# Chart
-# ---------------------------------------------------------------------------------
+# ------------------------------------------------------------
+# 4. Professional README visualization
+# ------------------------------------------------------------
 
 
 def plot_rmse_vs_size(
@@ -138,123 +244,579 @@ def plot_rmse_vs_size(
     baselines: dict[str, float] | None = None,
     path: Path | None = None,
 ):
-    """Validation RMSE against model size: winner green, tied blue, others grey.
+    """Professional model-selection visualization for GitHub README.
 
-    baselines: {label: validation RMSE} of the naive baselines, drawn as reference lines
-    (listed in the legend instead when far above every candidate). Uses matplotlib's
-    Figure directly (no pyplot), so it works in the CLI and in a notebook.
+    Left: All Random Forest candidates, with only the winner highlighted.
+    Right: Naive baseline RMSE comparison.
     """
+
+    import numpy as np
     from matplotlib.figure import Figure
 
-    colors = np.where(table["winner"], "tab:green", np.where(table["tied"], "tab:blue", "tab:grey"))
-    fig = Figure(figsize=(8, 5.5))
-    ax = fig.subplots()
-    ax.scatter(table["model_mb"], table["val_rmse"], c=colors, s=60)
-    for row in table.itertuples():
-        ax.annotate(
-            row.candidate, (row.model_mb, row.val_rmse), fontsize=7, xytext=(4, 3), textcoords="offset points"
-        )
-    best = table["val_rmse"].min()
-    ax.axhline(
-        best * (1 + tolerance), color="tab:red", linestyle="--", label=f"best + {tolerance:.0%} (tied below)"
+    # --------------------------------------------------
+    # Color palette
+    # --------------------------------------------------
+    BLUE = "#2563EB"
+    GREY = "#A3ACBA"
+    BLACK = "#171717"
+    TEXT = "#202938"
+    MUTED = "#64748B"
+    GRID = "#E5E7EB"
+
+    df = table.copy()
+
+    winners = df.loc[df["winner"].astype(bool)]
+
+    if len(winners) != 1:
+        raise ValueError("Expected exactly one selected winner.")
+
+    winner = winners.iloc[0]
+
+    best_rmse = df["val_rmse"].min()
+    threshold = best_rmse * (1 + tolerance)
+
+    # --------------------------------------------------
+    # Figure layout
+    # --------------------------------------------------
+    fig = Figure(
+        figsize=(14, 6.5),
+        facecolor="white",
     )
-    worst = table["val_rmse"].max()
-    for label, rmse in (baselines or {}).items():
-        if not np.isfinite(rmse):
-            continue
-        style: dict[str, Any] = {"color": "black", "linewidth": 1, "linestyle": ":"}
-        if rmse <= OFF_CHART_FACTOR * worst:
-            ax.axhline(rmse, label=f"{label} ({rmse:.3f})", **style)
-        else:  # far above every candidate: a line would squash the candidates, list it instead
-            ax.plot([], [], label=f"{label} ({rmse:.3f}, above chart)", **style)
-    ax.set_xscale("log")
-    ax.set(xlabel="model size (MB, skops, log scale)", ylabel="validation RMSE (min)", title="RMSE vs size")
-    ax.grid(alpha=0.3)
-    ax.legend(fontsize=8)
-    fig.tight_layout()
+
+    ax, ax_base = fig.subplots(
+        1,
+        2,
+        gridspec_kw={
+            "width_ratios": [3.2, 1.25],
+            "wspace": 0.44,
+        },
+    )
+
+    # --------------------------------------------------
+    # LEFT PANEL: Random Forest candidates
+    # --------------------------------------------------
+    other = df.loc[~df["winner"].astype(bool)]
+
+    ax.scatter(
+        other["model_mb"],
+        other["val_rmse"],
+        s=95,
+        color=GREY,
+        alpha=0.85,
+        edgecolors="white",
+        linewidths=1.4,
+        label="Random Forest candidates",
+        zorder=3,
+    )
+
+    # Highlight selected model
+    ax.scatter(
+        [winner["model_mb"]],
+        [winner["val_rmse"]],
+        s=245,
+        color=BLUE,
+        edgecolors="white",
+        linewidths=2.2,
+        label="Selected serving model",
+        zorder=6,
+    )
+
+    # Winner annotation below the blue dot
+    winner_label = (
+        f"{winner['candidate']}\nSize: {winner['model_mb']:.1f} MiB\nRMSE: {winner['val_rmse']:.4f} min"
+    )
+
+    ax.annotate(
+        winner_label,
+        xy=(
+            winner["model_mb"],
+            winner["val_rmse"],
+        ),
+        xytext=(12, -20),
+        textcoords="offset points",
+        fontsize=10,
+        fontweight="bold",
+        color=BLUE,
+        ha="left",
+        va="top",
+        linespacing=1.5,
+        zorder=7,
+    )
+
+    # Selection threshold
+    ax.axhline(
+        threshold,
+        color=MUTED,
+        linestyle="--",
+        linewidth=1.3,
+        label=f"RMSE tolerance (+{tolerance:.0%})",
+        zorder=2,
+    )
+
+    # Axis limits
+    lower = min(df["val_rmse"].min(), threshold)
+    upper = max(df["val_rmse"].max(), threshold)
+
+    margin = max(
+        (upper - lower) * 0.20,
+        0.025,
+    )
+
+    ax.set_ylim(
+        lower - margin,
+        upper + margin,
+    )
+
+    ax.set_xlim(
+        0,
+        df["model_mb"].max() * 1.08,
+    )
+
+    ax.set_title(
+        "Random Forest Candidates",
+        loc="left",
+        fontsize=14,
+        fontweight="bold",
+        color=TEXT,
+        pad=16,
+    )
+
+    ax.set_xlabel(
+        "Serialized Model Size (MiB)",
+        fontsize=11,
+        color=TEXT,
+        labelpad=12,
+    )
+
+    ax.set_ylabel(
+        "Validation RMSE (minutes)",
+        fontsize=11,
+        color=TEXT,
+        labelpad=12,
+    )
+
+    ax.legend(
+        loc="upper right",
+        fontsize=9,
+        frameon=False,
+    )
+
+    # --------------------------------------------------
+    # RIGHT PANEL: Naive baselines
+    # --------------------------------------------------
+    baseline_items = [
+        (str(name), float(value)) for name, value in (baselines or {}).items() if np.isfinite(float(value))
+    ]
+
+    if baseline_items:
+        labels = [name for name, _ in baseline_items]
+        values = [value for _, value in baseline_items]
+        positions = np.arange(len(labels))
+
+        ax_base.scatter(
+            values,
+            positions,
+            s=155,
+            marker="D",
+            color=BLACK,
+            edgecolors="white",
+            linewidths=1.3,
+            zorder=5,
+        )
+
+        for i, value in enumerate(values):
+            ax_base.annotate(
+                f"{value:.3f}",
+                xy=(value, i),
+                xytext=(10, 0),
+                textcoords="offset points",
+                fontsize=10,
+                fontweight="bold",
+                color=BLACK,
+                va="center",
+            )
+
+        ax_base.set_yticks(positions)
+        ax_base.set_yticklabels(
+            labels,
+            fontsize=10,
+            color=TEXT,
+        )
+
+        ax_base.invert_yaxis()
+
+        ax_base.set_xlim(
+            0,
+            max(values) * 1.30,
+        )
+
+        ax_base.set_ylim(
+            len(labels) - 0.5,
+            -0.5,
+        )
+
+    else:
+        ax_base.text(
+            0.5,
+            0.5,
+            "No baseline data available",
+            transform=ax_base.transAxes,
+            ha="center",
+            va="center",
+            color=MUTED,
+            fontsize=11,
+        )
+
+        ax_base.set_yticks([])
+
+    ax_base.set_title(
+        "Naive Baselines",
+        loc="left",
+        fontsize=14,
+        fontweight="bold",
+        color=TEXT,
+        pad=16,
+    )
+
+    ax_base.set_xlabel(
+        "Validation RMSE (minutes)",
+        fontsize=11,
+        color=TEXT,
+        labelpad=12,
+    )
+
+    # --------------------------------------------------
+    # Shared professional styling
+    # --------------------------------------------------
+    for axis in (ax, ax_base):
+        axis.set_facecolor("white")
+
+        axis.grid(
+            axis="x",
+            color=GRID,
+            linewidth=0.8,
+            alpha=0.85,
+        )
+
+        axis.set_axisbelow(True)
+
+        axis.spines["top"].set_visible(False)
+        axis.spines["right"].set_visible(False)
+
+        axis.spines["left"].set_color(GRID)
+        axis.spines["bottom"].set_color(GRID)
+
+        axis.tick_params(
+            axis="both",
+            labelsize=9,
+            colors=MUTED,
+            length=0,
+            pad=7,
+        )
+
+    # --------------------------------------------------
+    # Main title and explanation
+    # --------------------------------------------------
+    fig.suptitle(
+        "Model Selection | Accuracy vs. Efficiency",
+        x=0.07,
+        y=0.99,
+        ha="left",
+        fontsize=19,
+        fontweight="bold",
+        color=TEXT,
+    )
+
+    fig.text(
+        0.07,
+        0.015,
+        "Lower RMSE is better  |  "
+        "Selection favors the smallest model within "
+        f"{tolerance:.0%} of the best validation RMSE  |  "
+        "Baselines are accuracy references",
+        fontsize=9,
+        color=MUTED,
+    )
+
+    fig.subplots_adjust(
+        top=0.82,
+        bottom=0.19,
+        left=0.07,
+        right=0.94,
+    )
+
+    # --------------------------------------------------
+    # Save high-quality images for README
+    # --------------------------------------------------
     if path is not None:
-        fig.savefig(path, dpi=120)
+        path = Path(path)
+
+        path.parent.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
+
+        fig.savefig(
+            path,
+            dpi=300,
+            bbox_inches="tight",
+            facecolor="white",
+        )
+
+        fig.savefig(
+            path.with_suffix(".svg"),
+            bbox_inches="tight",
+            facecolor="white",
+        )
+
     return fig
 
 
-# ---------------------------------------------------------------------------------
-# The select step
-# ---------------------------------------------------------------------------------
+# ------------------------------------------------------------
+# 5. Final selection pipeline
+# ------------------------------------------------------------
 
 
 def _slug(label: str) -> str:
     return label.lower().replace("-", "_").replace(" ", "_")
 
 
-def run_selection(tolerance: float = RMSE_TOLERANCE, out_dir: Path = OUTPUT_DIR) -> dict:
-    """Apply the rule, refit the winner, score it once on test, register it (no alias)."""
+def run_selection(
+    tolerance: float = RMSE_TOLERANCE,
+    out_dir: Path = OUTPUT_DIR,
+) -> dict:
+    """Select using validation, then test and register winner."""
+
     import mlflow
 
     from src.baselines import read_baseline_runs
     from src.bundle import period_of
-    from src.experiment import EXPERIMENT, TRACKING_URI, log_model_artifacts
+    from src.experiment import (
+        EXPERIMENT,
+        TRACKING_URI,
+        log_model_artifacts,
+    )
     from src.features import build_features, build_zone_xy
     from src.tracking import alias_version
-    from src.train import MODEL_NAME, load_splits, period_params
+    from src.train import (
+        MODEL_NAME,
+        load_splits,
+        period_params,
+    )
 
     mlflow.set_tracking_uri(TRACKING_URI)
-    mlflow.set_experiment(EXPERIMENT)  # fails fast if the MLflow server is not running
-    champion_before = alias_version(MODEL_NAME, "champion")
+    mlflow.set_experiment(EXPERIMENT)
 
-    # 1. The rule, over the runs of `train` and `tune` (validation only)
-    table = apply_rule(collect_candidates(EXPERIMENT), tolerance)
+    champion_before = alias_version(
+        MODEL_NAME,
+        "champion",
+    )
+
+    # --------------------------------------------------------
+    # STEP 1: Select using validation results only
+    # --------------------------------------------------------
+
+    table = apply_rule(
+        collect_candidates(EXPERIMENT),
+        tolerance,
+    )
+
     winner = table.iloc[0]
     params = candidate_params(winner)
+
     print(
-        f"{int(table['tied'].sum())} of {len(table)} candidates tied within {tolerance:.0%} of the best RMSE"
-    )
-    print(
-        f"winner: {winner['candidate']} {params} "
-        f"(val RMSE {winner['val_rmse']:.4f}, {winner['model_mb']:.1f} MB)"
+        f"{int(table['tied'].sum())} of "
+        f"{len(table)} candidates within "
+        f"{tolerance:.0%} of best validation RMSE"
     )
 
-    # 2. Refit the winner on the same training sample (same seed = same model); test once
+    print(
+        f"Winner: {winner['candidate']} | "
+        f"Validation RMSE: {winner['val_rmse']:.4f} | "
+        f"Model size: {winner['model_mb']:.1f} MiB"
+    )
+
+    # --------------------------------------------------------
+    # STEP 2: Load data AFTER winner is selected
+    # --------------------------------------------------------
+
     splits = load_splits()
-    zone_xy = build_zone_xy(ROOT / "data")
-    X_sample, y_sample = build_features(splits.sample, zone_xy), splits.sample["duration"]
-    X_test = build_features(splits.test, zone_xy)
-    model = ev.fit_rf(params, X_sample, y_sample)
-    model_mb = ev.model_size_mb(model)
-    test_metrics = ev.score_predictions("test", splits.train, splits.test, model.predict(X_test))
 
-    # 3. Baselines on the same test days (naive: training-day statistics; RF baseline refitted)
-    baseline_runs, _ = read_baseline_runs(EXPERIMENT)
-    rows = []
-    for run_name, (predict, _description) in NAIVE_BASELINES.items():
-        label = NAIVE_LABELS[run_name]
-        scores = ev.score_predictions("test", splits.train, splits.test, predict(splits.train, splits.test))
-        val = baseline_runs[label].data.metrics.get("val_rmse", np.nan) if label in baseline_runs else np.nan
-        rows.append({"model": label, "val_rmse": val, **scores})
-    rf_row = table[table["candidate"] == RF_BASELINE_RUN].iloc[0]
-    rf_model = (
-        model
-        if winner["candidate"] == RF_BASELINE_RUN
-        else ev.fit_rf(candidate_params(rf_row), X_sample, y_sample)
+    zone_xy = build_zone_xy(ROOT / "data")
+
+    X_sample = build_features(
+        splits.sample,
+        zone_xy,
     )
-    rf_scores = ev.score_predictions("test", splits.train, splits.test, rf_model.predict(X_test))
-    rows.append({"model": "RF baseline", "val_rmse": rf_row["val_rmse"], **rf_scores})
-    del rf_model
+
+    y_sample = splits.sample["duration"]
+
+    X_test = build_features(
+        splits.test,
+        zone_xy,
+    )
+
+    # --------------------------------------------------------
+    # STEP 3: Refit winning configuration
+    # --------------------------------------------------------
+
+    model = ev.fit_rf(
+        params,
+        X_sample,
+        y_sample,
+    )
+
+    model_mb = ev.model_size_mb(model)
+
+    # --------------------------------------------------------
+    # STEP 4: Evaluate selected model on test
+    # --------------------------------------------------------
+
+    test_predictions = model.predict(X_test)
+
+    test_metrics = ev.score_predictions(
+        "test",
+        splits.train,
+        splits.test,
+        test_predictions,
+    )
+
+    # --------------------------------------------------------
+    # STEP 5: Evaluate reference baselines on same test
+    # --------------------------------------------------------
+
+    baseline_runs, _ = read_baseline_runs(EXPERIMENT)
+
+    rows = []
+
+    for run_name, (predict, _) in NAIVE_BASELINES.items():
+        label = NAIVE_LABELS[run_name]
+
+        predictions = predict(
+            splits.train,
+            splits.test,
+        )
+
+        scores = ev.score_predictions(
+            "test",
+            splits.train,
+            splits.test,
+            predictions,
+        )
+
+        val_rmse = (
+            baseline_runs[label].data.metrics.get(
+                "val_rmse",
+                np.nan,
+            )
+            if label in baseline_runs
+            else np.nan
+        )
+
+        rows.append(
+            {
+                "model": label,
+                "val_rmse": val_rmse,
+                **scores,
+            }
+        )
+
+    # Random Forest baseline
+    rf_row = table.loc[table["candidate"] == RF_BASELINE_RUN].iloc[0]
+
+    if winner["candidate"] == RF_BASELINE_RUN:
+        rf_model = model
+    else:
+        rf_model = ev.fit_rf(
+            candidate_params(rf_row),
+            X_sample,
+            y_sample,
+        )
+
+    rf_predictions = rf_model.predict(X_test)
+
+    rf_scores = ev.score_predictions(
+        "test",
+        splits.train,
+        splits.test,
+        rf_predictions,
+    )
+
+    rows.append(
+        {
+            "model": "RF baseline",
+            "val_rmse": rf_row["val_rmse"],
+            **rf_scores,
+        }
+    )
+
+    if rf_model is not model:
+        del rf_model
+
     winner_label = f"Winner ({winner['candidate']})"
-    rows.append({"model": winner_label, "val_rmse": winner["val_rmse"], **test_metrics})
+
+    rows.append(
+        {
+            "model": winner_label,
+            "val_rmse": winner["val_rmse"],
+            **test_metrics,
+        }
+    )
+
     comparison = pd.DataFrame(rows).set_index("model")
 
-    # 4. Files for the notebook
-    out_dir.mkdir(parents=True, exist_ok=True)
-    paths = {name: out_dir / name for name in (CANDIDATES_FILE, TEST_FILE, RULE_FILE, CHART_FILE)}
-    table.to_csv(paths[CANDIDATES_FILE], index=False)
-    comparison.to_csv(paths[TEST_FILE])
-    paths[RULE_FILE].write_text(rule_text(tolerance), encoding="utf-8")
-    naive_val = {
-        label: float(r["val_rmse"]) for label, r in comparison.iterrows() if label in NAIVE_LABELS.values()
-    }
-    plot_rmse_vs_size(table, tolerance, naive_val, path=paths[CHART_FILE])
+    # --------------------------------------------------------
+    # STEP 6: Export tables and professional chart
+    # --------------------------------------------------------
 
-    # 5. Log and register WITHOUT an alias
+    out_dir = Path(out_dir)
+
+    out_dir.mkdir(
+        parents=True,
+        exist_ok=True,
+    )
+
+    paths = {
+        name: out_dir / name
+        for name in (
+            CANDIDATES_FILE,
+            TEST_FILE,
+            RULE_FILE,
+            CHART_FILE,
+        )
+    }
+
+    table.to_csv(
+        paths[CANDIDATES_FILE],
+        index=False,
+    )
+
+    comparison.to_csv(
+        paths[TEST_FILE],
+    )
+
+    paths[RULE_FILE].write_text(
+        rule_text(tolerance),
+        encoding="utf-8",
+    )
+
+    naive_val = {
+        label: float(row["val_rmse"])
+        for label, row in comparison.iterrows()
+        if label in NAIVE_LABELS.values()
+    }
+
+    plot_rmse_vs_size(
+        table,
+        tolerance,
+        naive_val,
+        path=paths[CHART_FILE],
+    )
+
+    # --------------------------------------------------------
+    # STEP 7: Log and register without changing champion
+    # --------------------------------------------------------
+
     with mlflow.start_run(run_name=SELECT_RUN_NAME) as run:
         mlflow.log_params(
             {
@@ -267,19 +829,35 @@ def run_selection(tolerance: float = RMSE_TOLERANCE, out_dir: Path = OUTPUT_DIR)
                 **period_params(splits),
             }
         )
+
         metrics = {
             "winner_val_rmse": float(winner["val_rmse"]),
             "winner_val_mae": float(winner["val_mae"]),
             "winner_model_mb": model_mb,
             **test_metrics,
         }
-        for label, r in comparison.drop(index=winner_label).iterrows():
-            metrics[f"test_{_slug(str(label))}_rmse"] = float(r["test_rmse"])
-            metrics[f"test_{_slug(str(label))}_mae"] = float(r["test_mae"])
-        mlflow.log_metrics({k: v for k, v in metrics.items() if np.isfinite(v)})
-        mlflow.set_tag("winner", winner["candidate"])
-        for path in paths.values():
-            mlflow.log_artifact(str(path))
+
+        for label, row in comparison.drop(index=winner_label).iterrows():
+            metrics[f"test_{_slug(str(label))}_rmse"] = float(row["test_rmse"])
+
+            metrics[f"test_{_slug(str(label))}_mae"] = float(row["test_mae"])
+
+        mlflow.log_metrics({key: value for key, value in metrics.items() if np.isfinite(value)})
+
+        mlflow.set_tag(
+            "winner",
+            winner["candidate"],
+        )
+
+        for artifact_path in paths.values():
+            mlflow.log_artifact(str(artifact_path))
+
+        # Also log vector chart
+        svg_path = paths[CHART_FILE].with_suffix(".svg")
+
+        if svg_path.exists():
+            mlflow.log_artifact(str(svg_path))
+
         version = log_model_artifacts(
             model,
             zone_xy=zone_xy,
@@ -287,16 +865,30 @@ def run_selection(tolerance: float = RMSE_TOLERANCE, out_dir: Path = OUTPUT_DIR)
             X=X_sample,
             training_period=period_of(splits.sample),
         )
-        mlflow.set_tag("registered_version", str(version))
-        champion_after = alias_version(MODEL_NAME, "champion")
+
+        mlflow.set_tag(
+            "registered_version",
+            str(version),
+        )
+
+        champion_after = alias_version(
+            MODEL_NAME,
+            "champion",
+        )
+
         if champion_after != champion_before:
-            raise RuntimeError("champion alias changed - it must only be moved by hand")
+            raise RuntimeError("Champion alias changed unexpectedly.")
 
     print(
-        f"Winner: {winner['candidate']} | val RMSE {winner['val_rmse']:.4f} | "
-        f"test RMSE {test_metrics['test_rmse']:.4f} | {model_mb:.1f} MB | "
-        f"registered {MODEL_NAME} version {version} (no alias; champion still -> {champion_after})"
+        f"Winner: {winner['candidate']} | "
+        f"Validation RMSE: {winner['val_rmse']:.4f} | "
+        f"Test RMSE: {test_metrics['test_rmse']:.4f} | "
+        f"Size: {model_mb:.1f} MiB | "
+        f"Version: {version}"
     )
+
+    print(f"Champion alias unchanged: {champion_after}")
+
     return {
         "run_id": run.info.run_id,
         "selected": winner["candidate"],

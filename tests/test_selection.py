@@ -100,16 +100,43 @@ def test_collect_candidates_reads_rf_baseline_and_every_trial(monkeypatch):
     assert table.loc[1, "max_features"] == "0.5" and table.loc[0, "model_mb"] == 80.0
 
 
-def test_chart_marks_winner_and_lists_far_baselines():
-    table = selection.apply_rule(candidates([("rf-baseline", 4.5, 80.0), ("trial-0", 4.4, 300.0)]))
-    fig = selection.plot_rmse_vs_size(table, baselines={"Zone-pair median": 5.4, "Overall median": 10.0})
-    ax = fig.axes[0]
+def test_chart_marks_winner_tolerance_and_baselines():
+    # trial-1 (4.42) is within 1% of trial-0 (4.40) and smaller, so it is the winner
+    table = selection.apply_rule(
+        candidates([("rf-baseline", 4.5, 80.0), ("trial-0", 4.40, 300.0), ("trial-1", 4.42, 150.0)])
+    )
+    winner = table[table["winner"]].iloc[0]
+    baselines = {"Overall median": 10.0, "Zone-pair median": 5.4}
+    fig = selection.plot_rmse_vs_size(table, baselines=baselines)
+    ax, ax_base = fig.axes
+
+    # Left panel: legend, the winner marked at its own point, the tolerance band at best + 1%
     labels = [t.get_text() for t in ax.get_legend().get_texts()]
-    assert "Zone-pair median (5.400)" in labels
-    assert "Overall median (10.000, above chart)" in labels  # 10.0 > 1.5 x the worst candidate
-    assert ax.get_xscale() == "log" and ax.get_ylim()[1] < 10.0
+    assert {"Random Forest candidates", "Selected serving model", "RMSE tolerance (+1%)"} <= set(labels)
+    selected = next(c for c in ax.collections if c.get_label() == "Selected serving model")
+    np.testing.assert_allclose(selected.get_offsets(), [[winner["model_mb"], winner["val_rmse"]]])
+    others = next(c for c in ax.collections if c.get_label() == "Random Forest candidates")
+    assert len(others.get_offsets()) == len(table) - 1
+    band = next(line for line in ax.get_lines() if line.get_label() == "RMSE tolerance (+1%)")
+    assert band.get_ydata()[0] == pytest.approx(table["val_rmse"].min() * 1.01)
+    assert any(winner["candidate"] in t.get_text() for t in ax.texts)  # winner annotation
+
+    # Right panel: one marker per baseline, labelled with its name and its RMSE
+    assert [t.get_text() for t in ax_base.get_yticklabels()] == list(baselines)
+    values = {t.get_text() for t in ax_base.texts}
+    assert {f"{rmse:.3f}" for rmse in baselines.values()} <= values
+
+
+def test_chart_without_baselines_says_so():
+    table = selection.apply_rule(candidates([("rf-baseline", 4.5, 80.0)]))
+    fig = selection.plot_rmse_vs_size(table)
+    assert any("No baseline data" in t.get_text() for t in fig.axes[1].texts)
 
 
 def test_rule_text_states_the_rule():
-    text = selection.rule_text(0.01)
-    assert "within 1% of the best" in text and "smallest model" in text and "once on test" in text
+    text = selection.rule_text(0.01).lower()
+    assert "1%" in text  # the tolerance
+    assert "smallest" in text  # the smallest model among the tied runs wins
+    assert "test" in text  # the test set is used (after selection)
+    unchanged = ("without changing", "not", "never", "unchanged")
+    assert "champion" in text and any(word in text for word in unchanged)  # champion is not moved
