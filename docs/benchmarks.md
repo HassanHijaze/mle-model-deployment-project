@@ -1,59 +1,62 @@
-# API load test results
+# API Load Test Results
 
-Template: fill in every `<...>` after running the load test. Leave nothing estimated: every number
-here must come from a run.
+Locust benchmarks of the NYC Taxi Trip Duration Prediction API, running locally through Docker Compose with **MLflow model version 8**.
 
-## How to run
+## How to Run
 
 ```bash
 docker compose up -d postgres mlflow api prometheus
-curl http://localhost:8000/ready                       # a champion must be loaded
-uv run python tests/load/run_load_test.py              # 1, 10 and 50 users, 2 min each
-# options: --users 1 10 50  --run-time 5m  --host http://localhost:8000
+curl http://localhost:8000/ready
+
+uv run python tests/load/run_load_test.py --users 1 10 --run-time 2m
 ```
 
-Results land in `tests/load/results/` (git-ignored): Locust's CSV files per level and
-`<timestamp>_summary.csv` with one row per level (the numbers for the table below). While it runs,
-Prometheus (http://localhost:9090) shows the API's own view (see the README "Monitoring" section).
+Each scenario runs for two minutes. Locust saves its CSV results and a summary file in `tests/load/results/`.
 
-## Hardware
+## Test Environment
 
-| | |
+| Configuration | Value |
 |---|---|
-| Machine / CPU | `<model, cores / threads>` |
-| RAM | `<GB>` |
-| OS, Docker version | `<...>` |
-| Load generator | `<same machine as the API? yes/no>` |
-
-## Model
-
-| | |
-|---|---|
-| Model version (champion) | `<version>` (`curl http://localhost:8000/ready`) |
-| Winner run / params | `<from the MLflow run "select">` |
-| Serialized size (`model_mb`) | `<MB>` |
-
-## Settings
-
-| | |
-|---|---|
-| API container limits | memory `<API_MEMORY_LIMIT>`, CPUs `<API_CPU_LIMIT>` |
-| uvicorn workers | `<1 (default)>` |
-| Locust | think time 0.5-1.5 s per user, ~95% `/predict`, ~5% `/ready`, random zones 1-263, January 2025 pickup times |
-| Run time per level | `<e.g. 2m>` |
-| Date of the run | `<YYYY-MM-DD>` |
+| Test date | November 20, 2026 |
+| Operating system | Windows host |
+| Load generator | Locust 2.47.0 |
+| API deployment | Local Docker Compose |
+| API URL | `http://localhost:8000` |
+| Model version | 8 (`champion`) |
+| Selected model | Random Forest, Optuna `trial-1` |
+| Serialized model size | 112.4 MiB |
+| Test duration | 2 minutes per scenario |
 
 ## Results
 
-| Users | Throughput (req/s) | p50 (ms) | p95 (ms) | p99 (ms) | Error rate (%) | API peak memory (MiB) |
-|---:|---:|---:|---:|---:|---:|---:|
-| 1 | `<...>` | `<...>` | `<...>` | `<...>` | `<...>` | `<...>` |
-| 10 | `<...>` | `<...>` | `<...>` | `<...>` | `<...>` | `<...>` |
-| 50 | `<...>` | `<...>` | `<...>` | `<...>` | `<...>` | `<...>` |
+### Overall HTTP Traffic
 
-Latency is measured by Locust (client side, including HTTP); the API's own latency is in
-`taxi_api_request_duration_seconds` in Prometheus.
+Includes both `/predict` and `/ready` requests, as reported in the generated summary CSV.
+
+| Users | Requests | Throughput (req/s) | p50 (ms) | p95 (ms) | p99 (ms) | Error rate | Peak API RAM |
+|---:|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 109 | 0.93 | 77 | 80 | 82 | 0% | 627.6 MiB |
+| 10 | 1,112 | 9.30 | 76 | 120 | 170 | 0% | 628.6 MiB |
+
+### Prediction Endpoint Performance
+
+These results include only `POST /predict`, excluding readiness checks.
+
+| Users | Predictions | Prediction RPS | p50 | p95 | p99 | Failures |
+|---:|---:|---:|---:|---:|---:|---:|
+| 1 | 106 | 0.89 | 77 ms | 80 ms | 82 ms | 0% |
+| 10 | 1,060 | 8.87 | 77 ms | 120 ms | 170 ms | 0% |
+
 
 ## Observations
 
-- `<where latency starts to grow, errors if any, memory behaviour, CPU-bound or not>`
+- **Reliability:** Both completed scenarios reported zero failed requests.
+- **Median latency:** Prediction p50 remained at 77 ms when increasing from 1 to 10 users.
+- **Tail latency:** Prediction p95 increased from 80 ms to 120 ms.
+- **Throughput:** Prediction throughput increased from 0.89 to 8.87 requests per second.
+- **Memory:** Sampled peak API container memory increased from 627.6 MiB to 628.6 MiB.
+- **Capacity:** These results characterize the configured Locust workload, not the API's maximum throughput.
+
+
+
+**Raw results:** `tests/load/results/20261120-150927_summary.csv` .
