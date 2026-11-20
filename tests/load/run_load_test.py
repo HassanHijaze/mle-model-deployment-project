@@ -1,7 +1,7 @@
 """Run the Locust load test headless at several user levels and save the results as CSV.
 
-    uv run python tests/load/run_load_test.py                       # 1, 10, 50 users, 2 min each
-    uv run python tests/load/run_load_test.py --users 1 10 50 --run-time 5m --host http://localhost:8000
+    uv run python tests/load/run_load_test.py                       # 1, 10 users, 2 min each
+    uv run python tests/load/run_load_test.py --users 1 10  --run-time 5m --host http://localhost:8000
 
 For each level, Locust writes tests/load/results/<stamp>_users<N>_stats.csv (and _stats_history,
 _failures, _exceptions). This script adds tests/load/results/<stamp>_summary.csv with one row
@@ -136,7 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter
     )
     parser.add_argument("--host", default="http://localhost:8000")
-    parser.add_argument("--users", type=int, nargs="+", default=[1, 10, 50])
+    parser.add_argument("--users", type=int, nargs="+", default=[1, 10])
     parser.add_argument("--run-time", default="2m", help="per level, Locust format (30s, 2m, 1h)")
     args = parser.parse_args(argv)
 

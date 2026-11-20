@@ -1,143 +1,121 @@
+
 # NYC Taxi Trip Duration Prediction
 
 [![CI](https://github.com/HassanHijaze/mle-model-deployment-project/actions/workflows/ci.yml/badge.svg)](https://github.com/HassanHijaze/mle-model-deployment-project/actions/workflows/ci.yml)
 
-Predicts how long a NYC yellow-taxi trip will take from what is known at pickup: pickup zone, drop-off
-zone and pickup time. A reproducible pipeline trains and compares models on January 2025 data, registers
-the selected one in MLflow, and a FastAPI service serves it with safe hot reload and Prometheus metrics.
+An end-to-end ML system predicting NYC yellow-taxi trip duration from pickup/drop-off zones and pickup time. Includes reproducible training, validation-based model selection, MLflow registration, FastAPI serving, safe model reloads, CI, and Prometheus monitoring.
 
-**Result:** the model selected for serving reaches a **test RMSE of 4.4415 minutes** (Jan 26–31, scored
-once), against 5.4237 for the best naive baseline.
-**Stack:** scikit-learn · Optuna · MLflow (PostgreSQL) · FastAPI · Prometheus · Docker Compose
+**Result:** 4.4415 min test RMSE · **Serving model:** 112.4 MiB  
+**Stack:** scikit-learn · Optuna · MLflow · FastAPI · PostgreSQL · Docker Compose · Prometheus
+
+[Results](#results) · [Architecture](#architecture) · [Data](#data-insights) · [Quick Start](#quick-start) · [API](#api) · [Tests](#tests-and-ci) · [Benchmarks](#monitoring-and-benchmarks) · [Limitations](#limitations)
 
 ## Results
 
-Time-based split of 1–60 minute trips: train Jan 1–20, validation Jan 21–25, test Jan 26–31. Every model
-learns from the training days only; the test days are used once. RMSE in minutes, from the latest
-`select` run ([model_serving_selection.ipynb](notebooks/model_serving_selection.ipynb)).
+January 2025 trips (1–60 min), split chronologically: **train Jan 1–20 · validation Jan 21–25 · test Jan 26–31**.
 
-| Model | Validation RMSE | Test RMSE | Size |
+| Model | Val RMSE | Test RMSE | Size |
 |---|---:|---:|---:|
-| Overall median (naive) | 9.9949 | 10.1225 | – |
-| Zone-pair median (naive) | 5.4437 | 5.4237 | – |
-| Random Forest baseline | 4.4771 | 4.4837 | – |
-| **Selected: trial-1** (Optuna) | **4.4435** | **4.4415** | **112.4 MiB** |
+| Overall median | 9.9949 | 10.1225 | — |
+| Zone-pair median | 5.4437 | 5.4237 | — |
+| Random Forest baseline | 4.4771 | 4.4837 | — |
+| **Selected RF (trial-1)** | **4.4435** | **4.4415** | **112.4 MiB** |
 
-Selection rule, fixed before the results:
-1. Find the lowest validation RMSE among the RF baseline and the 20 Optuna trials.
-2. Every candidate within 1% of it counts as tied (9 of 21 were).
-3. The smallest tied model wins: trial-1, 0.34% above the best RMSE.
+**Selection rule:** From 20 Optuna trials plus the RF baseline, choose the smallest model within **1% of the best validation RMSE**. Nine of 21 candidates qualified; the winner was only 0.34% above the best validation score.
 
-![Validation RMSE against model size: the selected model is the smallest within 1% of the best](docs/images/model-selection-rmse-vs-size.png)
+![Validation RMSE versus model size](docs/images/model-selection-rmse-vs-size.png)
 
-## How it works
+Model selection uses validation data, not test data. Earlier exploratory experiments inspected the January test period; an independent future-month evaluation remains future work.
+
+## Architecture
 
 ```mermaid
 flowchart LR
-    A[TLC trip data<br/>January 2025] --> B[Clean and split<br/>1-60 min trips]
-    B --> C[Features<br/>zones, hour, weekday, holiday]
-    C --> D[train<br/>baselines] --> F[select<br/>rule + one test score]
-    C --> E[tune<br/>20 Optuna trials] --> F
-    F --> G[(MLflow registry<br/>no alias)]
-    G -->|champion alias, set by hand| H[FastAPI<br/>/predict, /reload]
-    H --> I[Prometheus<br/>/metrics]
+    A["NYC TLC Data"] --> B["Clean & Split"]
+    B --> C["Feature Engineering"]
+    C --> D["Train & Tune"]
+    D --> E["Select on Validation"]
+    E --> F["Test & Register<br/>MLflow"]
+    F -->|"Manual promotion"| G["FastAPI<br/>Predict & Reload"]
+    G --> H["Prometheus"]
 ```
 
-| Command | What it does |
-|---|---|
-| `uv run nyc-taxi data` | Downloads January 2025 and builds the zone table |
-| `uv run nyc-taxi train` | Overall median, zone-pair median and RF baseline, scored on validation |
-| `uv run nyc-taxi tune` | 20 Optuna trials: validation RMSE, MAE and model size |
-| `uv run nyc-taxi select` | Applies the rule, scores winner and baselines once on test, registers the winner |
-| `uv run nyc-taxi all` | data → train → tune → select |
-| `uv run nyc-taxi verify <version>` | Loads a registered version in a fresh process and checks it |
+**Pipeline:** `uv run nyc-taxi all` runs data → train → tune → select. Registration does not automatically promote the model. See [model selection notebook](notebooks/model_serving_selection.ipynb) and [operations guide](docs/operations.md).
 
-## What the data showed
+## Data Insights
 
-From [exploration.ipynb](notebooks/exploration.ipynb) (training days only for the time patterns).
+[Exploratory analysis](notebooks/exploration.ipynb) shows differences in trip duration by hour, weekday, and holiday.
 
-![Median trip duration by pickup hour, by weekday, and on holidays vs other weekdays](docs/images/time-patterns-hour-weekday-holiday.png)
+![Trip duration by hour, weekday, and holiday](docs/images/time-patterns-hour-weekday-holiday.png)
 
-- **Hour:** the median trip takes 10.4 min at 6 am and 12.2 min at 2 pm, so the pickup hour is a feature.
-- **Weekday:** Thursday is the slowest day (12.1 min), Sunday the fastest (10.8 min).
-- **Holidays:** no morning rush (9.4 vs 12.0 min at 8–10 am), so a holiday flag is a feature.
+- **Time:** Median duration ranges from 10.4 min at 6 AM to 12.2 min at 2 PM.
+- **Weekday:** Thursday is slowest (12.1 min); Sunday is fastest (10.8 min).
+- **Cleaning:** 97.9% of trips fall within the retained 1–60 min range.
 
-![Distribution of trip durations with the kept 1-60 minute range](docs/images/trip-duration-histogram.png)
+![Trip duration distribution](docs/images/trip-duration-histogram.png)
 
-- **Cleaning:** 97.9% of trips last 1–60 minutes; the rest are mostly recording errors and are dropped.
-
-## Quick start
+## Quick Start
 
 ```bash
-uv sync && cp .env.example .env          # once; set your own passwords and ADMIN_TOKEN
-docker compose up -d postgres mlflow     # MLflow UI: http://localhost:5002
-uv run nyc-taxi all                      # prints the registered version
-uv run nyc-taxi verify <version>         # must print OK
-# set the "champion" alias on that version in the MLflow UI, then:
-docker compose up -d api
-export $(grep ADMIN_TOKEN .env)
-curl -X POST http://localhost:8000/reload -H "X-Admin-Token: $ADMIN_TOKEN"
-curl -X POST http://localhost:8000/predict -H "Content-Type: application/json" \
-  -d '{"PULocationID": 161, "DOLocationID": 236, "pickup_datetime": "2025-01-27T08:30:00"}'
+uv sync
+cp .env.example .env                 # Configure credentials and ADMIN_TOKEN
+docker compose up -d postgres mlflow
+uv run nyc-taxi all                  # Train, select, register
+uv run nyc-taxi verify <version>     # Verify registered model
 ```
 
-Promotion and rollback: [docs/operations.md](docs/operations.md).
+Assign the verified version the `champion` alias in the MLflow UI, then start the API:
+
+```bash
+docker compose up -d api
+export ADMIN_TOKEN="$(grep '^ADMIN_TOKEN=' .env | cut -d= -f2-)"
+curl -X POST http://localhost:8000/reload -H "X-Admin-Token: $ADMIN_TOKEN"
+curl http://localhost:8000/ready
+curl -X POST http://localhost:8000/predict \
+  -H "Content-Type: application/json" \
+  -d '{"PULocationID":161,"DOLocationID":236,"pickup_datetime":"2025-01-27T08:30:00"}'
+```
 
 ## API
 
-| Endpoint | Description |
+| Endpoint | Purpose |
 |---|---|
-| `POST /predict` | Trip duration in minutes, with the model version that answered |
-| `POST /reload` | Loads the current `champion`, validates it, then swaps; needs `X-Admin-Token` |
-| `GET /live` · `GET /ready` | The process is up · a validated model is loaded |
-| `GET /health` · `GET /metrics` | Model and last reload status · Prometheus metrics |
+| `POST /predict` | Predict duration and return model version |
+| `POST /reload` | Authenticated, validated model hot reload |
+| `GET /live`, `/ready` | Liveness and model readiness |
+| `GET /health`, `/metrics` | Health status and Prometheus metrics |
 
-```text
-request:  {"PULocationID": 161, "DOLocationID": 236, "pickup_datetime": "2025-01-27T08:30:00"}
-response: {"duration_minutes": <minutes>, "model_version": "<registered version>"}
-```
-
-Zone IDs 1–265, New York local time without a timezone. Training and the API share `src/features.py`; each
-model carries its zone table and feature schema, which `/reload` validates before swapping (on failure the
-previous model keeps serving). Errors share one format (`code`, `message`, `request_id`); logs are JSON lines.
+Training and serving share `src/features.py`. Failed reloads preserve the previously serving model. See [operations guide](docs/operations.md).
 
 ## Tests and CI
 
-| What | Command | CI job |
-|---|---|---|
-| Format, lint, types | `uv run ruff format --check .` · `uv run ruff check .` · `uv run mypy` | `lint` |
-| Dependency vulnerabilities | `uv run pip-audit` on the exported lock file | `security` |
-| Unit and API tests (fake models, no MLflow) | `uv run pytest` | `tests` |
-| Docker images and Prometheus config | `docker build .` | `docker` |
-| End-to-end on a throwaway stack: promote, upgrade, reject a broken version | `uv run pytest -m e2e tests/e2e` | `e2e` |
-| Load test (1, 10, 50 users) | `uv run python tests/load/run_load_test.py` | local only |
+CI checks formatting, linting, types, dependency vulnerabilities, unit/API tests, Docker builds, and end-to-end model promotion and rollback.
 
-## Monitoring
+```bash
+uv run pytest
+uv run pytest -m e2e tests/e2e
+uv run python tests/load/run_load_test.py --users 1 10
+```
 
-`GET /metrics` exposes request counts and latency by route, predictions and errors, the active model
-version, model load time and reload failures. `docker compose up -d prometheus` scrapes it every 15 seconds;
-query it at http://localhost:9090 (e.g. `taxi_api_model_info`, `taxi_api_request_duration_seconds_bucket`).
-Load-test procedure and results template: [docs/benchmarks.md](docs/benchmarks.md).
+## Monitoring and Benchmarks
 
-## Limitations and next steps
+Prometheus collects HTTP latency, request counts, prediction errors, active model version, and reload metrics. Start with `docker compose up -d prometheus`.
 
-**Limitations**
-- One month of data: no seasons, weather or special events.
-- Zone-level locations only, so trips within the same zone pair vary a lot.
-- Only trips of 1–60 minutes are modelled and served.
-- Every Random Forest is fitted on a 500,000-trip sample of the training days.
+**Locust benchmark:** Local Docker deployment, MLflow model version 8, two minutes per scenario.
 
-**Next steps**
-- Train on several months and add traffic or weather data.
-- Fit on all training trips and add model size to the Optuna objective.
-- Return prediction ranges from the spread of the trees, most useful for airport trips.
-- Run the load test and fill in [docs/benchmarks.md](docs/benchmarks.md).
+| Users | p50 | p95 | p99 | Prediction RPS | Errors | Peak RAM |
+|---|---:|---:|---:|---:|---:|---:|
+| 1 | 77 ms | 80 ms | 82 ms | 0.89 | 0% | 627.6 MiB |
+| 10 | 77 ms | 120 ms | 170 ms | 8.87 | 0% | 628.6 MiB |
 
-## Project questions
+Median latency remained stable as concurrency increased, with **zero request failures**. Results describe this workload, not maximum API capacity.
 
-**1. What is the RMSE of your final model?** 4.4415 minutes on the test days (Jan 26–31) for the selected
-model, trial-1, computed once after selection.
+[Benchmark procedure](docs/benchmarks.md) · [Prometheus UI](http://localhost:9090)
 
-**2. What would you do differently if you had more time?** Use more months and extra signals such as
-traffic and weather, fit on all training trips instead of a sample, search for smaller models directly,
-and return prediction ranges instead of a single number.
+## Limitations
+
+- January 2025 only; no seasonal, traffic, or weather features.
+- Zone-level pickup/drop-off locations; no exact routes.
+- Predictions limited to trips lasting 1–60 minutes.
+- Random Forest training uses a 500,000-trip sample.
+- Future work: independent later-month evaluation, more training data, prediction intervals, and higher-concurrency stress tests.
