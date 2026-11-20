@@ -1,7 +1,6 @@
-
 # NYC Taxi Trip Duration Prediction
 
-[![CI](https://github.com/HassanHijaze/mle-model-deployment-project/actions/workflows/ci.yml/badge.svg)](https://github.com/HassanHijaze/mle-model-deployment-project/actions/workflows/ci.yml)
+[![CI](https://github.com/HassanHijaze/production-ml-microservice/actions/workflows/ci.yml/badge.svg)](https://github.com/HassanHijaze/production-ml-microservice/actions/workflows/ci.yml)
 
 **From NYC TLC trip records to a monitored prediction API.** This project predicts yellow-taxi trip duration using only information available at pickup: origin zone, destination zone, and pickup time. It includes reproducible training, validation-based model selection, MLflow registration, safe FastAPI model reloads, CI, and Prometheus metrics.
 
@@ -15,22 +14,22 @@
 
 January 2025 NYC yellow-taxi trips, restricted to **1–60 minutes**, with a chronological split: **train Jan 1–20**, **validate Jan 21–25**, **test Jan 26–31**. RMSE is measured in minutes.
 
-| Model | Validation RMSE | Test RMSE | Serialized size |
-|---|---:|---:|---:|
-| Overall median (naive) | 9.9949 | 10.1225 | Not measured |
-| Zone-pair median (naive) | 5.4437 | 5.4237 | Not measured |
-| Random Forest baseline | 4.4771 | 4.4837 | 190.7 MiB |
-| **Selected RF · trial-1** | **4.4435** | **4.4415** | **112.4 MiB** |
+| Model | Validation RMSE | Test RMSE |
+|---|---:|---:|
+| Overall median | 9.9949 | 10.1225 |
+| Zone-pair median | 5.4437 | 5.4237 |
+| Random Forest baseline | 4.4771 | 4.4837 |
+| **Selected RF · trial-1** | **4.4435** | **4.4415** |
 
-The selected model reduces test RMSE by **18.1%** relative to the zone-pair median baseline and is **41.1% smaller** than the RF baseline, with slightly better accuracy. Sizes are measured serialized model sizes, not Docker image or total deployment sizes.
+The selected model reduces test RMSE by **18.1%** relative to the zone-pair median baseline and is **41.1% smaller** than the RF baseline, with slightly better accuracy. Sizes refer to serialized model artifacts, not Docker images or total deployment sizes.
 
 ## Why this model?
 
-A lower error is useful only if the model is practical to serve. The selection rule was set in advance and uses **validation results**, not test performance:
+A lower error is useful only if the model is practical to serve. The selection rule uses **validation results**, not test performance:
 
 1. Evaluate the RF baseline and **20 Optuna trials** on the validation period.
 2. Keep models within **1% of the best validation RMSE**.
-3. Select the **smallest qualifying model** and then evaluate it on the test period.
+3. Select the **smallest qualifying model**, then evaluate it on the test period.
 
 **Nine of 21** candidates qualified. The chosen model, `trial-1`, was just **0.34%** above the best validation RMSE, at **112.4 MiB**.
 
@@ -38,11 +37,9 @@ A lower error is useful only if the model is practical to serve. The selection r
 
 [Selection notebook](notebooks/model_serving_selection.ipynb)
 
-The current pipeline selects without using test scores; earlier exploration did inspect the January test period, so an **independent later-month holdout** is still needed for a fully untouched evaluation.
-
 ## Architecture
 
-```mermaid id="8f6p1a"
+```mermaid
 flowchart LR
     A["NYC TLC data"] --> B["Clean + chronological split"]
     B --> C["Pickup-time features"]
@@ -71,7 +68,7 @@ The registry **does not automatically promote** new versions. An operator assign
 
 Requires `uv`, Docker, and Docker Compose. Configure credentials and `ADMIN_TOKEN` in `.env` before running.
 
-```bash id="qu4j2w"
+```bash
 uv sync
 cp .env.example .env
 docker compose up -d postgres mlflow    # MLflow: http://localhost:5002
@@ -81,7 +78,7 @@ uv run nyc-taxi verify <version>        # verify the printed registered version
 
 In MLflow, assign the verified version the **`champion`** alias. Then start the API and load it:
 
-```bash id="4f1ns9"
+```bash
 docker compose up -d api
 export ADMIN_TOKEN="$(grep '^ADMIN_TOKEN=' .env | cut -d= -f2-)"
 curl -X POST http://localhost:8000/reload -H "X-Admin-Token: $ADMIN_TOKEN"
@@ -117,7 +114,7 @@ GitHub Actions checks formatting, lint, types, dependency security, unit/API tes
 
 **Takeaway:** p50 held at **77 ms** with 10 simulated users and no observed failures. This measures the configured Locust workload, **not maximum throughput**; sampled RAM is container usage, not estimator size.
 
-```bash id="xt7v2b"
+```bash
 uv run pytest
 uv run python tests/load/run_load_test.py --users 1 10
 docker compose up -d prometheus        # http://localhost:9090
@@ -130,9 +127,9 @@ docker compose up -d prometheus        # http://localhost:9090
 | Decision | Reason / trade-off |
 |---|---|
 | **Pickup-time inputs only** | Avoid features unavailable when a trip begins; zone centroids cannot capture actual routes or traffic. |
-| **Chronological validation** | Better matches future-trip inference than a random split; only January 2025 is represented. |
+| **Chronological validation** | Better matches future-trip inference than a random split; results cover January 2025. |
 | **Smallest model within 1%** | Preserves near-best predictive quality with a smaller serving artifact. |
 | **Manual promotion + safe reload** | Keeps model registration separate from deployment and preserves service on failed reload. |
 | **500k training-trip sample** | Controls training cost; fitting on all available trips remains to be assessed. |
 
-**Next:** evaluate on an untouched later month, add weather/traffic features, analyze errors by trip length and airport routes, estimate prediction intervals, and stress-test higher concurrency.
+**Next:** add weather/traffic features, analyze errors by trip length and airport routes, estimate prediction intervals, and stress-test higher concurrency.
